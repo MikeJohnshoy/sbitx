@@ -269,8 +269,8 @@ static unsigned long millis_now = 0;
 static int cw_key_state = 0;
 static int cw_period;
 static struct vfo cw_tone, cw_env;
-static int keydown_count=0;			//counts down pause afer a keydown is finished
-static int keyup_count = 0;			//counts down how long a key is held down
+static int keydown_count=0;	
+static int keyup_count = 0;	
 static float cw_envelope = 1;		//used to shape the envelope
 static int cw_tx_until = 0;			//delay switching to rx, expect more txing
 static int data_tx_until = 0;
@@ -360,14 +360,14 @@ static int cw_read_key(){
 // Trying to improve CW straight-key performance (and performance with external electronic keyers)
 // without changing electronic keyer function, performance or timing
 float cw_tx_get_sample() {
-  float sample; // the shaped CW level (0 to 1)
+  float sample;        // the shaped CW level (0 to 1)
   uint8_t symbol_now;
-  sample = 0; // used in CW envelope shaping
+  sample = 0;          // used in CW envelope shaping
   
   if (!keydown_count && !keyup_count) { // CW key may be going down - because it's not up
-    millis_now = millis();        // remember time of possible keydown
+    millis_now = millis();              // remember time of possible keydown
     if (cw_tone.freq_hz != get_pitch()) // set CW pitch if needed
-      vfo_start( & cw_tone, get_pitch(), 0);
+      vfo_start( &cw_tone, get_pitch(), 0);
   }
 
   symbol_now = cw_read_key();
@@ -405,11 +405,11 @@ float cw_tx_get_sample() {
       cw_current_symbol = CW_DOT_DELAY;
     }
     break;
-  case CW_DOWN: // the straight key is down
-    if (symbol_now == CW_DOWN) { // we don't really care how long it's held down
-      keydown_count++;           // but maybe one day we will check for a maximum
+  case CW_DOWN:      // the straight key is down
+    if (symbol_now == CW_DOWN) {   // we don't really care how long it's held down
+      keydown_count++;             // but maybe one day we will check for a maximum
       keyup_count = 0;
-    } else { // key was down but now it's up
+    } else {                       // key was down but now it's not
       keydown_count = 0;
       keyup_count++;
       cw_current_symbol = CW_IDLE; //go back to idle
@@ -467,12 +467,12 @@ float cw_tx_get_sample() {
   if (symbol_now == CW_DOWN) {
     if (keydown_count > 0) {    // countdown for the leading edge
       if (cw_envelope < 0.999)
-        cw_envelope = ((vfo_read(&cw_env) / FLOAT_SCALE) + 1) / 2; 
+        cw_envelope = ((vfo_read(&cw_env) / FLOAT_SCALE) + 1) / 2;      // between 0 and 1
       keydown_count--;          // countdown for the leading edge
 	}
     else {                      // trailing edge
       if (cw_envelope > 0.001) 
-        cw_envelope = 1 - ((vfo_read(&cw_env) / FLOAT_SCALE) + 1) / 2; 
+        cw_envelope = 1 - ((vfo_read(&cw_env) / FLOAT_SCALE) + 1) / 2;  // between 1 and 0
       if (keyup_count > 0)
           keyup_count--;        // countdown for the trailing edge
       }	  
@@ -494,7 +494,7 @@ float cw_tx_get_sample() {
   sample = (vfo_read(&cw_tone) / FLOAT_SCALE) * cw_envelope;
 
   // stay in transmit mode until CW_DELAY from UI satisfied
-  if (keyup_count > 0 || keydown_count > 0)
+  if (symbol_now == CW_DOWN || keydown_count > 0) // was (keyup_count > 0 || keydown_count > 0)
     cw_tx_until = millis_now + get_cw_delay();   
   return sample / 8;
 }
@@ -805,41 +805,4 @@ void cw_poll(int bytes_available, int tx_is_on){
 
 void cw_abort(){
 	//flush all the tx text buffer
-}
-
-/*
-//we play with n-bins, and frequency distances between the bins
-int main(int argc, char  **argv){
-	int testData[10000];
-	int n_bins;
-	int sampling_freq = 12000;
-
-	if (argc != 5){
-		puts("cmd [filename] [n_bins] [freq] [wpm]");
-		exit(-1);
-	}
-	
-	n_bins = atoi(argv[2]);
-	int freq = atoi(argv[3]);
-	int wpm = atoi(argv[4]);
-
-	cw_init(&decoder, sampling_freq, n_bins, freq, wpm); 
-
-	FILE *pf = fopen(argv[1], "r");
-	pfout = fopen("mag.raw", "w");
-	int block_count = 0;
-	while(1){
-	  for (int index = 0; index < decoder.n_bins; index++) {
-			int16_t s;
-			if(fread(&s, 1, 2, pf) <= 0){
-				//puts("File error");
-				fclose(pfout);
-				fclose(pf);
-				exit(0);
-			}
-    	testData[index] = s;
-  	}
-		cw_process(&decoder, testData);
-	}
-	fclose(pf);
 }
