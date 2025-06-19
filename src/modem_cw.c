@@ -1102,217 +1102,202 @@ void handle_cw_state_machine(uint8_t state_machine_mode, uint8_t symbol_now) {
 
 static FILE *pfout = NULL; //this is debugging out, not used normally
 
-static void cw_rx_bin_init(struct bin *p, float freq, int n, 
-	float sampling_freq){
-
-  p->k = (int) (0.5 + ((n * freq) / sampling_freq));
+static void cw_rx_bin_init(struct bin *p, float freq, int n, float sampling_freq) {
+  p->k = (int)(0.5 + ((n * freq) / sampling_freq));
   p->omega = (2.0 * M_PI * p->k) / n;
   p->sine = sin(p->omega);
   p->cosine = cos(p->omega);
   p->coeff = 2.0 * p->cosine;
-	p->n = n;
-	p->freq = freq;
-	p->scalingFactor = n / 2.0;
+  p->n = n;
+  p->freq = freq;
+  p->scalingFactor = n / 2.0;
 }
 
-static int cw_rx_bin_detect(struct bin *p, int32_t *data){
-	float Q2 = 0;
-	float Q1 = 0;
-	for (int index = 0; index < p->n; index++){
-	  float Q0;
-  	Q0 = p->coeff * Q1 - Q2 + (float) (*data);
-  	Q2 = Q1;
-  	Q1 = Q0;	
-		data++;
- 	}
-	double real = (Q1 * p->cosine - Q2) / p->scalingFactor;
+static int cw_rx_bin_detect(struct bin *p, int32_t *data) {
+  float Q2 = 0;
+  float Q1 = 0;
+  for (int index = 0; index < p->n; index++) {
+    float Q0;
+    Q0 = p->coeff * Q1 - Q2 + (float)(*data);
+    Q2 = Q1;
+    Q1 = Q0;
+    data++;
+  }
+  double real = (Q1 * p->cosine - Q2) / p->scalingFactor;
   double imag = (Q1 * p->sine) / p->scalingFactor;
 
- 	int  magnitude = sqrt(real*real + imag*imag); 
-	return magnitude;
-} 
-
-static void cw_rx_match_letter(struct cw_decoder *p){
-	char code[MAX_SYMBOLS];
-
-	if (p->next_symbol == 0){
-		return;
-	}
-
-	int len = p->next_symbol;
-	int in_mark = 0;
-	int total_ticks = 0;
-	int min_dot = (p->dash_len / 6); 
-	code[0] = 0;
-	int i = 0;
-
-	while(i < p->next_symbol){
-		if (p->symbol_str[i].is_mark){
-			if(!in_mark && p->symbol_str[i].ticks > min_dot){
-				in_mark = 1;
-				total_ticks = 0;
-			}
-		}
-		else {
-			if(in_mark && p->symbol_str[i].ticks > min_dot){
-				in_mark = 0;
-				if (total_ticks > p->dash_len / 2){
-					strcat(code, "-");
-					//track the dashes
-					int new_dash = ((p->dash_len * 3) + total_ticks)/4;
-					int init_dash_len = (18 * SAMPLING_FREQ) / (5 * N_BINS* p->wpm); 
-					if (init_dash_len/2 <  new_dash && new_dash < init_dash_len * 2)
-						p->dash_len = new_dash;
-					//printf("%d\n", p->dash_len);
-				}
-				else if (min_dot <= total_ticks && total_ticks <= p->dash_len/2)
-					strcat(code, ".");
-			}
-		}
-		total_ticks += p->symbol_str[i].ticks;
-		i++;
-	}	
-
-	p->next_symbol = 0;
-	for (int i = 0; i < sizeof(morse_rx_table)/sizeof(struct morse_rx); i++)
-		if (!strcmp(code, morse_rx_table[i].code)){
-			write_console(FONT_CW_RX, morse_rx_table[i].c);
-			return;
-		}
-	//un-decoded phrases
-	write_console(FONT_CW_RX, code);
-
+  int magnitude = sqrt(real * real + imag * imag);
+  return magnitude;
 }
 
-static void cw_rx_add_symbol(struct cw_decoder *p, char symbol){
-	if (p->next_symbol == MAX_SYMBOLS)
-		p->next_symbol = 0;
-	p->symbol_str[p->next_symbol].is_mark = symbol == ' '? 0: 1;
-	p->symbol_str[p->next_symbol].ticks = p->ticker;
-	p->symbol_str[p->next_symbol].magnitude = 
-		((p->symbol_str[p->next_symbol].magnitude *10) + p->magnitude)/11;
-	p->next_symbol++;
+static void cw_rx_match_letter(struct cw_decoder *p) {
+  char code[MAX_SYMBOLS];
+
+  if (p->next_symbol == 0) {
+    return;
+  }
+
+  int len = p->next_symbol;
+  int in_mark = 0;
+  int total_ticks = 0;
+  int min_dot = (p->dash_len / 6);
+  code[0] = 0;
+  int i = 0;
+
+  while (i < p->next_symbol) {
+    if (p->symbol_str[i].is_mark) {
+      if (!in_mark && p->symbol_str[i].ticks > min_dot) {
+        in_mark = 1;
+        total_ticks = 0;
+      }
+    } else {
+      if (in_mark && p->symbol_str[i].ticks > min_dot) {
+        in_mark = 0;
+        if (total_ticks > p->dash_len / 2) {
+          strcat(code, "-");
+          // track the dashes
+          int new_dash = ((p->dash_len * 3) + total_ticks) / 4;
+          int init_dash_len = (18 * SAMPLING_FREQ) / (5 * N_BINS * p->wpm);
+          if (init_dash_len / 2 < new_dash && new_dash < init_dash_len * 2)
+            p->dash_len = new_dash;
+          // printf("%d\n", p->dash_len);
+        } else if (min_dot <= total_ticks && total_ticks <= p->dash_len / 2) {
+          strcat(code, ".");
+        }
+      }
+    }
+    total_ticks += p->symbol_str[i].ticks;
+    i++;
+  }
+
+  p->next_symbol = 0;
+  for (int i = 0; i < sizeof(morse_rx_table) / sizeof(struct morse_rx); i++)
+    if (!strcmp(code, morse_rx_table[i].code)) {
+      write_console(FONT_CW_RX, morse_rx_table[i].c);
+      return;
+    }
+  // un-decoded phrases
+  write_console(FONT_CW_RX, code);
+}
+
+static void cw_rx_add_symbol(struct cw_decoder *p, char symbol) {
+  if (p->next_symbol == MAX_SYMBOLS)
+    p->next_symbol = 0;
+  p->symbol_str[p->next_symbol].is_mark = symbol == ' ' ? 0 : 1;
+  p->symbol_str[p->next_symbol].ticks = p->ticker;
+  p->symbol_str[p->next_symbol].magnitude =
+    ((p->symbol_str[p->next_symbol].magnitude * 10) + p->magnitude) / 11;
+  p->next_symbol++;
 }
 
 /*
 The highs maybe due to noise (that usually lasts very short durations,
 Using large n_bins usually does away with that.
-
 */
 
-#define HIGH_DECAY 100 
-#define NOISE_DECAY 100 
+#define HIGH_DECAY 100
+#define NOISE_DECAY 100
 
-static void cw_rx_update_levels(struct cw_decoder *p){
-	int new_high = p->magnitude;
+static void cw_rx_update_levels(struct cw_decoder *p) {
+  int new_high = p->magnitude;
 
-	if (p->high_level < p->magnitude)
-		p->high_level = new_high;
-	else
-		p->high_level = (p->magnitude + ((HIGH_DECAY -1) 
-			* p->high_level))/HIGH_DECAY;
+  if (p->high_level < p->magnitude)
+    p->high_level = new_high;
+  else
+    p->high_level = (p->magnitude + ((HIGH_DECAY - 1) * p->high_level)) / HIGH_DECAY;
 
-	if (p->magnitude <  (p->high_level * 4)/10 ){ 
-		// clamp the lows to prevent inf
-		if (p->magnitude < 100)
-			p->magnitude = 100;
-		p->noise_floor = (p->magnitude + ((NOISE_DECAY -1) 
-			* p->noise_floor))/NOISE_DECAY;
-		p->symbol_magnitude += p->magnitude;
-	}
+  if (p->magnitude < (p->high_level * 4) / 10) {
+    // clamp the lows to prevent inf
+    if (p->magnitude < 100)
+      p->magnitude = 100;
+    p->noise_floor = (p->magnitude + ((NOISE_DECAY - 1) * p->noise_floor)) / NOISE_DECAY;
+    p->symbol_magnitude += p->magnitude;
+  }
 }
 
-//we skip the smaller glitches
-void cw_rx_denoise(struct cw_decoder *p){
+// we skip the smaller glitches
+void cw_rx_denoise(struct cw_decoder *p) {
+  p->history_sig <<= 1;
+  if (p->sig_state)
+    p->history_sig |= 1;
 
-	p->history_sig <<= 1;
-	if (p->sig_state)
-		p->history_sig |= 1;
-
-	p->prev_mark = p->mark;
-	switch(p->history_sig & 0xf){
-	case 0:
-	case 1:
-	case 2:
-	case 3:
-	case 4:
-	case 8:
-			p->mark = 0;
-			break;
-	default:
-		p->mark = 30000;
-		break;	
-	}	
+  p->prev_mark = p->mark;
+  switch (p->history_sig & 0xf) {
+    case 0:
+    case 1:
+    case 2:
+    case 3:
+    case 4:
+    case 8:
+      p->mark = 0;
+      break;
+    default:
+      p->mark = 30000;
+      break;
+  }
 }
 
-static void cw_rx_detect_symbol(struct cw_decoder *p){
-
-	if (p->mark == 0 && p->prev_mark > 0){ //end of mark
-		cw_rx_add_symbol(p, 'm');
-		p->ticker = 0;
-	}
-	else if (p->mark > 1 && p->prev_mark == 0){ //start of mark
-		cw_rx_add_symbol(p, ' ');
-		p->ticker = 0;//reset the timer to measure the length of the mark
-	}
-	else if (p->mark == 0 && p->prev_mark == 0){ //continuing space
-		if (p->next_symbol == 0){
-	 		if(p->ticker > (p->dash_len * 3)/2){
-				write_console(FONT_CW_RX, " ");
-				p->ticker = 0;
-			}
-		}
-		else if (p->ticker >  p->dash_len/2){
-			cw_rx_add_symbol(p, ' ');
-			cw_rx_match_letter(p);
-			if (p->ticker > (p->dash_len * 3)/2){
-				write_console(FONT_CW_RX, " ");
-			}
-			p->ticker = 0;
-		}
-	}
-	else if (p->mark > 0  && p->prev_mark > 0){	// skip unusually long dashes
-		if (p->ticker > p->dash_len * 3)
-			p->ticker = p->dash_len;
-	}
+static void cw_rx_detect_symbol(struct cw_decoder *p) {
+  if (p->mark == 0 && p->prev_mark > 0) { // end of mark
+    cw_rx_add_symbol(p, 'm');
+    p->ticker = 0;
+  } else if (p->mark > 1 && p->prev_mark == 0) { // start of mark
+    cw_rx_add_symbol(p, ' ');
+    p->ticker = 0; // reset the timer to measure the length of the mark
+  } else if (p->mark == 0 && p->prev_mark == 0) { // continuing space
+    if (p->next_symbol == 0) {
+      if (p->ticker > (p->dash_len * 3) / 2) {
+        write_console(FONT_CW_RX, " ");
+        p->ticker = 0;
+      }
+    } else if (p->ticker > p->dash_len / 2) {
+      cw_rx_add_symbol(p, ' ');
+      cw_rx_match_letter(p);
+      if (p->ticker > (p->dash_len * 3) / 2) {
+        write_console(FONT_CW_RX, " ");
+      }
+      p->ticker = 0;
+    }
+  } else if (p->mark > 0 && p->prev_mark > 0) { // skip unusually long dashes
+    if (p->ticker > p->dash_len * 3)
+      p->ticker = p->dash_len;
+  }
 }
 
-static void cw_rx_bin(struct cw_decoder *p, int32_t *samples){
+static void cw_rx_bin(struct cw_decoder *p, int32_t *samples) {
+  int sig_now = cw_rx_bin_detect(&p->signal, samples);
 
-	int sig_now = cw_rx_bin_detect(&p->signal, samples);
-	
-	p->magnitude = sig_now;
+  p->magnitude = sig_now;
 
-	if (p->magnitude > (p->high_level * 6)/10){
-			p->sig_state = 30000;
-	}
-	else if (p->magnitude <  (p->high_level * 4)/10 ){ 
-		p->sig_state = 0;
-	}
+  if (p->magnitude > (p->high_level * 6) / 10) {
+    p->sig_state = 30000;
+  } else if (p->magnitude < (p->high_level * 4) / 10) {
+    p->sig_state = 0;
+  }
 
-	cw_rx_update_levels(p);
-	cw_rx_denoise(p); //this also updates the mark member of struct cw_decode
-	cw_rx_detect_symbol(p);
-	p->ticker++;
+  cw_rx_update_levels(p);
+  cw_rx_denoise(p); // this also updates the mark member of struct cw_decode
+  cw_rx_detect_symbol(p);
+  p->ticker++;
 
-	//only in case of debugging
-	if (pfout){
-		int sym_mag = p->symbol_str[p->next_symbol].magnitude;
-		int mag = p->magnitude;
-		int snr1 = 1;
-		if (p->noise_floor > 100)
-			snr1 = (p->magnitude * 10)/p->noise_floor;
-		int snr = 0;
-		if (snr1 > 20)
-			snr = 10000;
-		for (int i = 0; i < p->n_bins; i++){
-			fwrite(&mag,2,1,pfout);	
-		//fwrite(&mark,2,1,pfout);	
-			fwrite(&p->mark, 2, 1, pfout);
-			fwrite(&sym_mag, 2, 1, pfout);
-			fwrite(&snr, 2, 1, pfout);
-		}
-	}
+  // only in case of debugging
+  if (pfout) {
+    int sym_mag = p->symbol_str[p->next_symbol].magnitude;
+    int mag = p->magnitude;
+    int snr1 = 1;
+    if (p->noise_floor > 100)
+      snr1 = (p->magnitude * 10) / p->noise_floor;
+    int snr = 0;
+    if (snr1 > 20)
+      snr = 10000;
+    for (int i = 0; i < p->n_bins; i++) {
+      fwrite(&mag, 2, 1, pfout);
+      // fwrite(&mark,2,1,pfout);
+      fwrite(&p->mark, 2, 1, pfout);
+      fwrite(&sym_mag, 2, 1, pfout);
+      fwrite(&snr, 2, 1, pfout);
+    }
+  }
 }
 
 void cw_rx(int32_t *samples, int count){
