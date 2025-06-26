@@ -284,6 +284,8 @@ int bfo_offset = 0;
 #define MIN_KEY_F12 0xFFC9
 #define COMMAND_ESCAPE '\\'
 
+int text_ready = 0;  // set flag when text from keyboard is ready to send
+
 void set_ui(int id);
 void set_bandwidth(int hz);
 
