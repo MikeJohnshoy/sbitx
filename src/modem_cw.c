@@ -289,6 +289,8 @@ static int cw_bytes_available = 0; //chars available in the tx queue
 #define CW_MAX_SYMBOLS 12
 char cw_key_letter[CW_MAX_SYMBOLS];
 
+extern int text_ready;  // check this to see if keyboard text is ready to send
+
 static uint8_t cw_get_next_symbol(){  //symbol to translate into CW_DOT, CW_DASH, etc
 
 	if (!symbol_next)
