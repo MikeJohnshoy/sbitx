@@ -23,6 +23,7 @@
 #include "si5351.h"
 #include "ini.h"
 #include "para_eq.h"
+#include "cessb_limiter.h"
 
 #define DEBUG 0
 
@@ -1780,6 +1781,24 @@ void tx_process(
 		__imag__ fft_out[i] = __imag__ fft_out[i] * ssb_val;
 	}
 
+  // add call to new CESSB lookahead envelope limiter function
+  int n_ssb = MAX_BINS / 2;
+  float cessb_in[MAX_BINS];
+  float cessb_out[MAX_BINS];
+  // prepare interleaved I/Q samples for the limiter
+  for (int k = 0; k < n_ssb; ++k) {
+    cessb_in[2*k]   = __real__ fft_out[k];
+    cessb_in[2*k+1] = __imag__ fft_out[k];
+  }
+  // apply CESSB lookahead limiter (limit=0.95, lookahead=16)
+  // values for limit and lookahead should be tuned
+  cessb_envelope_limiter_lookahead(cessb_in, cessb_out, n_ssb, 0.95f, 16);
+  // Copy limited samples back into fft_out
+  for (int k = 0; k < n_ssb; ++k) {
+    __real__ fft_out[k] = cessb_out[2*k];
+    __imag__ fft_out[k] = cessb_out[2*k+1];
+  }  // end of addded code for CESSB
+    
 	// now rotate to the tx_bin
 	// rememeber the AM is already a carrier modulated at 24 KHz
 	int shift = tx_shift;
