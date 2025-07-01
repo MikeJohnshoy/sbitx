@@ -54,7 +54,7 @@ void cessb_envelope_limiter_lookahead(
         if (max_env > limit && max_env > 0.0f)
             gain = limit / max_env;
 
-        // Optionally, use soft clipping for smoother limiting
+        // Apply soft clipping for smoother limiting
         I = soft_clip(I * gain, limit);
         Q = soft_clip(Q * gain, limit);
 
