@@ -1,5 +1,6 @@
 #include <math.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h> // for memset
 
 // Simple soft clipper for gentle limiting
