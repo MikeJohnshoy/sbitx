@@ -26,7 +26,7 @@ static float soft_clip(float x, float threshold) {
 }
 
 // CESSB envelope limiter with lookahead
-// Working in frequcney domain but using I and Q for real and imaginary
+// Working in frequency domain but using I and Q for real and imaginary
 // in[]: input I/Q samples (interleaved: I, Q, I, Q, ...)
 // out[]: output I/Q samples (same format)
 // len: number of samples (I/Q pairs)
@@ -74,6 +74,7 @@ void cessb_envelope_limiter_lookahead(const float *in, float *out, size_t len, f
     out[2 * i + 1] = Q;
   }
 
+/*
   // for DEVELOPMENT PURPOSES ONLY
   // remove from production code
   // Find maximum envelope out of look ahead limiter
@@ -91,6 +92,7 @@ void cessb_envelope_limiter_lookahead(const float *in, float *out, size_t len, f
 
   // Log the values
   cessb_log_data(max_env, max_out_mag);
+*/
 
   free(envelopes);
 }
