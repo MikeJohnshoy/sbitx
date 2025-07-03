@@ -10,9 +10,8 @@
 void cessb_log_data(float max_env, float max_mag) {
   FILE *log = fopen("cessb_limiter.log", "a");
   if (log) {
-    fprintf(log,
-            "max_env out of limiter: %f, max_env out of soft clipper: %f\n",
-            max_env, max_mag);
+    fprintf(log, "max_env out of limiter: %f, max_env out of soft clipper: %f\n", max_env,
+            max_mag);
     fclose(log);
   }
 }
@@ -20,9 +19,8 @@ void cessb_log_data(float max_env, float max_mag) {
 // Simple soft clipper for gentle limiting
 static float soft_clip(float x, float threshold) {
   if (fabsf(x) > threshold) {
-    return copysignf(threshold + (fabsf(x) - threshold) /
-                                     (1.0f + powf((fabsf(x) - threshold), 2)),
-                     x);
+    return copysignf(
+        threshold + (fabsf(x) - threshold) / (1.0f + powf((fabsf(x) - threshold), 2)), x);
   }
   return x;
 }
@@ -34,8 +32,8 @@ static float soft_clip(float x, float threshold) {
 // len: number of samples (I/Q pairs)
 // limit: maximum allowed envelope (suggest: 0.9 to 0.99 for float)
 // lookahead: number of samples (I/Q pairs) to look ahead (suggest: 8–32)
-void cessb_envelope_limiter_lookahead(const float *in, float *out, size_t len,
-                                      float limit, int lookahead) {
+void cessb_envelope_limiter_lookahead(const float *in, float *out, size_t len, float limit,
+                                      int lookahead) {
   if (lookahead < 1) lookahead = 1;
   if (lookahead > (int)len) lookahead = (int)len;
 
@@ -87,8 +85,7 @@ void cessb_envelope_limiter_lookahead(const float *in, float *out, size_t len,
   // Find maximum output magnitude out of soft clipper
   float max_out_mag = 0.0f;
   for (size_t i = 0; i < len; ++i) {
-    float mag =
-        sqrtf(out[2 * i] * out[2 * i] + out[2 * i + 1] * out[2 * i + 1]);
+    float mag = sqrtf(out[2 * i] * out[2 * i] + out[2 * i + 1] * out[2 * i + 1]);
     if (mag > max_out_mag) max_out_mag = mag;
   }
 
