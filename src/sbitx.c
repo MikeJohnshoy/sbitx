@@ -1570,7 +1570,13 @@ void tx_process(
 {
 	int i;
 	double i_sample, q_sample, i_carrier;
-	
+
+  static int cessb_limiter_initialized = 0;
+  // if needed initialize cessb lookahead limiter
+  if (!cessb_limiter_initialized) {
+      cessb_lookahead_init();
+      cessb_limiter_initialized = 1;
+  }
 	// Check if browser microphone is active and use it instead of physical mic
 	int32_t browser_mic_samples[n_samples];
 	int use_browser_mic = is_browser_mic_active();
