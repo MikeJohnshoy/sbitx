@@ -4,16 +4,67 @@
 #include <stdlib.h>
 #include <string.h>  // for memset
 
-// create a log for CESSB debug purposes only
-// this log will be BAD for performance and should be deleted from production
-// code
-void cessb_log_data(float max_env, float max_mag) {
-  FILE *log = fopen("cessb_limiter.log", "a");
-  if (log) {
-    fprintf(log, "max_env out of limiter: %f, max_env out of soft clipper: %f\n", max_env,
-            max_mag);
-    fclose(log);
-  }
+#define FFT_BLOCK_SIZE 256    // Set to your actual FFT block size
+#define LOOKAHEAD_BLOCKS 8
+#define IQ_PER_BLOCK (FFT_BLOCK_SIZE * 2)
+#define BUFFER_SIZE (LOOKAHEAD_BLOCKS * IQ_PER_BLOCK)
+#define LIMIT 0.95f
+
+static struct {
+    float iq_buffer[BUFFER_SIZE];
+    int blocks_in_buffer;
+    int initialized;
+} cessb_lookahead_buf;
+
+void cessb_lookahead_init(void) {
+    memset(cessb_lookahead_buf.iq_buffer, 0, sizeof(cessb_lookahead_buf.iq_buffer));
+    cessb_lookahead_buf.blocks_in_buffer = 0;
+    cessb_lookahead_buf.initialized = 1;
+}
+
+int cessb_lookahead_process(const float *new_fft_block, float *limited_block) {
+    if (!cessb_lookahead_buf.initialized) cessb_lookahead_init();
+
+    if (cessb_lookahead_buf.blocks_in_buffer == LOOKAHEAD_BLOCKS) {
+        cessb_envelope_limiter_lookahead(
+            cessb_lookahead_buf.iq_buffer, cessb_lookahead_buf.iq_buffer,
+            FFT_BLOCK_SIZE * LOOKAHEAD_BLOCKS,
+            LIMIT,
+            FFT_BLOCK_SIZE * LOOKAHEAD_BLOCKS
+        );
+        memcpy(limited_block, cessb_lookahead_buf.iq_buffer, sizeof(float) * IQ_PER_BLOCK);
+        memmove(cessb_lookahead_buf.iq_buffer,
+                cessb_lookahead_buf.iq_buffer + IQ_PER_BLOCK,
+                sizeof(float) * IQ_PER_BLOCK * (LOOKAHEAD_BLOCKS - 1));
+        cessb_lookahead_buf.blocks_in_buffer--;
+        memcpy(cessb_lookahead_buf.iq_buffer + (cessb_lookahead_buf.blocks_in_buffer * IQ_PER_BLOCK),
+               new_fft_block, sizeof(float) * IQ_PER_BLOCK);
+        cessb_lookahead_buf.blocks_in_buffer++;
+        return 1; // produced one output block
+    } else {
+        memcpy(cessb_lookahead_buf.iq_buffer + (cessb_lookahead_buf.blocks_in_buffer * IQ_PER_BLOCK),
+               new_fft_block, sizeof(float) * IQ_PER_BLOCK);
+        cessb_lookahead_buf.blocks_in_buffer++;
+        return 0; // no output yet
+    }
+}
+
+int cessb_lookahead_flush(float *limited_block) {
+    if (cessb_lookahead_buf.blocks_in_buffer > 0) {
+        cessb_envelope_limiter_lookahead(
+            cessb_lookahead_buf.iq_buffer, cessb_lookahead_buf.iq_buffer,
+            FFT_BLOCK_SIZE * cessb_lookahead_buf.blocks_in_buffer,
+            LIMIT,
+            FFT_BLOCK_SIZE * cessb_lookahead_buf.blocks_in_buffer
+        );
+        memcpy(limited_block, cessb_lookahead_buf.iq_buffer, sizeof(float) * IQ_PER_BLOCK);
+        memmove(cessb_lookahead_buf.iq_buffer,
+                cessb_lookahead_buf.iq_buffer + IQ_PER_BLOCK,
+                sizeof(float) * IQ_PER_BLOCK * (cessb_lookahead_buf.blocks_in_buffer - 1));
+        cessb_lookahead_buf.blocks_in_buffer--;
+        return 1;
+    }
+    return 0;
 }
 
 // Simple soft clipper for gentle limiting
@@ -73,26 +124,5 @@ void cessb_envelope_limiter_lookahead(const float *in, float *out, size_t len, f
     out[2 * i] = I;
     out[2 * i + 1] = Q;
   }
-
-/*
-  // for DEVELOPMENT PURPOSES ONLY
-  // remove from production code
-  // Find maximum envelope out of look ahead limiter
-  float max_env = envelopes[0];
-  for (size_t i = 1; i < len; ++i) {
-    if (envelopes[i] > max_env) max_env = envelopes[i];
-  }
-
-  // Find maximum output magnitude out of soft clipper
-  float max_out_mag = 0.0f;
-  for (size_t i = 0; i < len; ++i) {
-    float mag = sqrtf(out[2 * i] * out[2 * i] + out[2 * i + 1] * out[2 * i + 1]);
-    if (mag > max_out_mag) max_out_mag = mag;
-  }
-
-  // Log the values
-  cessb_log_data(max_env, max_out_mag);
-*/
-
   free(envelopes);
 }
