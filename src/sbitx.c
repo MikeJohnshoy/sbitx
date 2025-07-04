@@ -1781,23 +1781,28 @@ void tx_process(
 		__imag__ fft_out[i] = __imag__ fft_out[i] * ssb_val;
 	}
 
-  // add call to new CESSB lookahead envelope limiter function
-  int n_ssb = MAX_BINS / 2;
-  float cessb_in[MAX_BINS];
-  float cessb_out[MAX_BINS];
-  // prepare interleaved I/Q samples for the limiter
-  for (int k = 0; k < n_ssb; ++k) {
-    cessb_in[2*k]   = __real__ fft_out[k];
-    cessb_in[2*k+1] = __imag__ fft_out[k];
-  }
-  // apply CESSB lookahead limiter (limit=0.95, lookahead=16)
-  // values for limit and lookahead should be tuned
-  cessb_envelope_limiter_lookahead(cessb_in, cessb_out, n_ssb, 0.95f, 16);
-  // Copy limited samples back into fft_out
-  for (int k = 0; k < n_ssb; ++k) {
-    __real__ fft_out[k] = cessb_out[2*k];
-    __imag__ fft_out[k] = cessb_out[2*k+1];
-  }  // end of addded code for CESSB
+	// add call to new CESSB lookahead envelope limiter function
+	int n_ssb = MAX_BINS / 2;
+	float cessb_in[MAX_BINS];
+	float limited_block[MAX_BINS];
+	
+	// Prepare interleaved I/Q for the limiter
+	for (int k = 0; k < n_ssb; ++k) {
+	  cessb_in[2 * k] = __real__ fft_out[k];
+	  cessb_in[2 * k + 1] = __imag__ fft_out[k];
+	}
+	
+	// Send block to the lookahead limiter
+	if (cessb_lookahead_process(cessb_in, limited_block)) {
+	  // Copy limited samples back into fft_out
+	  // This will only copy back when a fully limited block is ready
+	  for (int k = 0; k < n_ssb; ++k) {
+	    __real__ fft_out[k] = limited_block[2 * k];
+	    __imag__ fft_out[k] = limited_block[2 * k + 1];
+	  }
+	}
+	// NOTE: when no more buffers are available we should flush buffer
+	// end of addded code for CESSB
     
 	// now rotate to the tx_bin
 	// rememeber the AM is already a carrier modulated at 24 KHz
