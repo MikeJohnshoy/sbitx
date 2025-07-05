@@ -1792,7 +1792,7 @@ void tx_process(
 	float cessb_in[MAX_BINS];
 	float limited_block[MAX_BINS];
 	
-	// Prepare interleaved I/Q for the limiter
+	// Prepare fft block to send to lookahead processor
 	for (int k = 0; k < n_ssb; ++k) {
 	  cessb_in[2 * k] = __real__ fft_out[k];
 	  cessb_in[2 * k + 1] = __imag__ fft_out[k];
@@ -1801,7 +1801,7 @@ void tx_process(
 	// Send block to the lookahead processor
 	if (cessb_lookahead_process(cessb_in, limited_block)) {
 	  // Copy limited samples back into fft_out
-	  // This will only copy back when a fully limited block is ready
+	  // if a fully limited block is ready
 	  for (int k = 0; k < n_ssb; ++k) {
 	    __real__ fft_out[k] = limited_block[2 * k];
 	    __imag__ fft_out[k] = limited_block[2 * k + 1];
