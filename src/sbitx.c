@@ -1787,7 +1787,7 @@ void tx_process(
 		__imag__ fft_out[i] = __imag__ fft_out[i] * ssb_val;
 	}
 
-	// add call to new CESSB lookahead envelope limiter function
+	// add call to new CESSB lookahead processor
 	int n_ssb = MAX_BINS / 2;
 	float cessb_in[MAX_BINS];
 	float limited_block[MAX_BINS];
@@ -1798,7 +1798,7 @@ void tx_process(
 	  cessb_in[2 * k + 1] = __imag__ fft_out[k];
 	}
 	
-	// Send block to the lookahead limiter
+	// Send block to the lookahead processor
 	if (cessb_lookahead_process(cessb_in, limited_block)) {
 	  // Copy limited samples back into fft_out
 	  // This will only copy back when a fully limited block is ready
