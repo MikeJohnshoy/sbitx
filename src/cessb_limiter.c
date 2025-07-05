@@ -4,11 +4,15 @@
 #include <stdlib.h>
 #include <string.h>  // for memset
 
-#define FFT_BLOCK_SIZE 256    // Set to your actual FFT block size
-#define LOOKAHEAD_BLOCKS 8
+// *** tune for performance ***
+#define LOOKAHEAD_BLOCKS 8  // 1 = no lookahead
+#define LIMIT 0.95f  // threshold level for soft clipping
+// *** end of tunable values
+
+#define FFT_BLOCK_SIZE 2048    // FFT block size used in sbitx.c
 #define IQ_PER_BLOCK (FFT_BLOCK_SIZE * 2)
 #define BUFFER_SIZE (LOOKAHEAD_BLOCKS * IQ_PER_BLOCK)
-#define LIMIT 0.95f
+
 
 static struct {
     float iq_buffer[BUFFER_SIZE];
