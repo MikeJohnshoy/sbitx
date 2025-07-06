@@ -1571,12 +1571,6 @@ void tx_process(
 	int i;
 	double i_sample, q_sample, i_carrier;
 
-  static int cessb_limiter_initialized = 0;
-  // if needed initialize cessb lookahead limiter
-  if (!cessb_limiter_initialized) {
-      cessb_lookahead_init();
-      cessb_limiter_initialized = 1;
-  }
 	// Check if browser microphone is active and use it instead of physical mic
 	int32_t browser_mic_samples[n_samples];
 	int use_browser_mic = is_browser_mic_active();
@@ -1799,14 +1793,15 @@ void tx_process(
 	}
 	
 	// Send block to the lookahead processor
-	if (cessb_lookahead_process(cessb_in, limited_block)) {
-	  // Copy limited samples back into fft_out
-	  // if a fully limited block is ready
-	  for (int k = 0; k < n_ssb; ++k) {
-	    __real__ fft_out[k] = limited_block[2 * k];
-	    __imag__ fft_out[k] = limited_block[2 * k + 1];
-	  }
-	}
+	IQPair* processed = cessb_lookahead_process((IQPair*)cessb_in);
+  if (processed != NULL) {
+    // Copy limited samples back into fft_out
+    // if a fullly limited block is ready
+    for (int k = 0; k < n_ssb; ++k) {
+        __real__ fft_out[k] = processed[k].i;
+        __imag__ fft_out[k] = processed[k].q;
+    }
+}
 	// NOTE: when no more buffers are available we should flush buffer
 	// end of addded code for CESSB
     
