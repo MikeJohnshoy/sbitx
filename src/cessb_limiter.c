@@ -14,6 +14,8 @@ typedef struct {
   float q;
 } IQPair;
 
+#define FFT_BLOCK_SIZE 2048
+
 // --- Static Buffers for Lookahead Processing ---
 static IQPair lookahead_buffer[LOOKAHEAD_SIZE][FFT_BLOCK_SIZE];
 static float peak_magnitudes[LOOKAHEAD_SIZE];  // peak magnitude found in each block
@@ -22,7 +24,7 @@ static int blocks_processed_count = 0;
 static IQPair output_block[FFT_BLOCK_SIZE];
 
 IQPair* cessb_lookahead_process(const IQPair* cessb_in) {
-  // Find the peak magnitude of the incoming block and store the block itself
+  // Find the peak magnitude of the incoming block and store block itself
   float current_block_peak = 0.0f;
   for (int i = 0; i < FFT_BLOCK_SIZE; i++) {
     // Copy the sample into our circular buffer.
@@ -36,10 +38,9 @@ IQPair* cessb_lookahead_process(const IQPair* cessb_in) {
   }
   peak_magnitudes[current_buffer_index] = current_block_peak;
 
-  IQPair* block_to_return = NULL;
-
   // Check if we have received enough blocks to fill the lookahead window.
-  // We can start processing once the buffer is full.
+  // We can start processing once the buffer is full
+  IQPair* block_to_return = NULL;
   if (blocks_processed_count >= LOOKAHEAD_SIZE - 1) {
     // The buffer is full, so we can process and return the oldest block.
     // In a circular buffer, the oldest block is the one after the one we just wrote to
@@ -58,7 +59,8 @@ IQPair* cessb_lookahead_process(const IQPair* cessb_in) {
       // necessary scaling factor to bring it down to the target level.
       scale_factor = TARGET_PEAK / largest_peak_found;
     }
-    // Apply the scaling factor to the OLDEST block and copy it to the output buffer.
+    // Apply the scaling factor to the OLDEST block and copy it to the output buffer
+    // (in circular buffer the oldest block is always the next one)
     for (int i = 0; i < FFT_BLOCK_SIZE; i++) {
       output_block[i].i = lookahead_buffer[oldest_block_index][i].i * scale_factor;
       output_block[i].q = lookahead_buffer[oldest_block_index][i].q * scale_factor;
