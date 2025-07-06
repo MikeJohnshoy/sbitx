@@ -5,128 +5,72 @@
 #include <string.h>  // for memset
 
 // *** tune for performance ***
-#define LOOKAHEAD_BLOCKS 8  // 1 = no lookahead
-#define LIMIT 0.95f  // threshold level for soft clipping
+#define LOOKAHEAD_SIZE 8   // minimum of 1
+#define TARGET_PEAK 15.0f  // keep PA in linear range
 // *** end of tunable values
 
-#define FFT_BLOCK_SIZE 2048    // FFT block size used in sbitx.c
-#define IQ_PER_BLOCK (FFT_BLOCK_SIZE * 2)
-#define BUFFER_SIZE (LOOKAHEAD_BLOCKS * IQ_PER_BLOCK)
+typedef struct {
+  float i;
+  float q;
+} IQPair;
 
+// --- Static Buffers for Lookahead Processing ---
+static IQPair lookahead_buffer[LOOKAHEAD_SIZE][FFT_BLOCK_SIZE];
+static float peak_magnitudes[LOOKAHEAD_SIZE];  // peak magnitude found in each block
+static int current_buffer_index = 0;
+static int blocks_processed_count = 0;
+static IQPair output_block[FFT_BLOCK_SIZE];
 
-static struct {
-    float iq_buffer[BUFFER_SIZE];
-    int blocks_in_buffer;
-    int initialized;
-} cessb_lookahead_buf;
-
-void cessb_lookahead_init(void) {
-    memset(cessb_lookahead_buf.iq_buffer, 0, sizeof(cessb_lookahead_buf.iq_buffer));
-    cessb_lookahead_buf.blocks_in_buffer = 0;
-    cessb_lookahead_buf.initialized = 1;
-}
-
-int cessb_lookahead_process(const float *new_fft_block, float *limited_block) {
-    if (!cessb_lookahead_buf.initialized) cessb_lookahead_init();
-
-    if (cessb_lookahead_buf.blocks_in_buffer == LOOKAHEAD_BLOCKS) {
-        cessb_envelope_limiter_lookahead(
-            cessb_lookahead_buf.iq_buffer, cessb_lookahead_buf.iq_buffer,
-            FFT_BLOCK_SIZE * LOOKAHEAD_BLOCKS,
-            LIMIT,
-            FFT_BLOCK_SIZE * LOOKAHEAD_BLOCKS
-        );
-        memcpy(limited_block, cessb_lookahead_buf.iq_buffer, sizeof(float) * IQ_PER_BLOCK);
-        memmove(cessb_lookahead_buf.iq_buffer,
-                cessb_lookahead_buf.iq_buffer + IQ_PER_BLOCK,
-                sizeof(float) * IQ_PER_BLOCK * (LOOKAHEAD_BLOCKS - 1));
-        cessb_lookahead_buf.blocks_in_buffer--;
-        memcpy(cessb_lookahead_buf.iq_buffer + (cessb_lookahead_buf.blocks_in_buffer * IQ_PER_BLOCK),
-               new_fft_block, sizeof(float) * IQ_PER_BLOCK);
-        cessb_lookahead_buf.blocks_in_buffer++;
-        return 1; // produced one output block
-    } else {
-        memcpy(cessb_lookahead_buf.iq_buffer + (cessb_lookahead_buf.blocks_in_buffer * IQ_PER_BLOCK),
-               new_fft_block, sizeof(float) * IQ_PER_BLOCK);
-        cessb_lookahead_buf.blocks_in_buffer++;
-        return 0; // no output yet
+IQPair* cessb_lookahead_process(const IQPair* cessb_in) {
+  // Find the peak magnitude of the incoming block and store the block itself
+  float current_block_peak = 0.0f;
+  for (int i = 0; i < FFT_BLOCK_SIZE; i++) {
+    // Copy the sample into our circular buffer.
+    lookahead_buffer[current_buffer_index][i] = cessb_in[i];
+    // Calculate magnitude squared to avoid costly sqrt in the loop
+    float mag_sq = (cessb_in[i].i * cessb_in[i].i) + (cessb_in[i].q * cessb_in[i].q);
+    // Compare squared magnitudes
+    if (mag_sq > (current_block_peak * current_block_peak)) {
+      current_block_peak = sqrtf(mag_sq);
     }
-}
-
-int cessb_lookahead_flush(float *limited_block) {
-    if (cessb_lookahead_buf.blocks_in_buffer > 0) {
-        cessb_envelope_limiter_lookahead(
-            cessb_lookahead_buf.iq_buffer, cessb_lookahead_buf.iq_buffer,
-            FFT_BLOCK_SIZE * cessb_lookahead_buf.blocks_in_buffer,
-            LIMIT,
-            FFT_BLOCK_SIZE * cessb_lookahead_buf.blocks_in_buffer
-        );
-        memcpy(limited_block, cessb_lookahead_buf.iq_buffer, sizeof(float) * IQ_PER_BLOCK);
-        memmove(cessb_lookahead_buf.iq_buffer,
-                cessb_lookahead_buf.iq_buffer + IQ_PER_BLOCK,
-                sizeof(float) * IQ_PER_BLOCK * (cessb_lookahead_buf.blocks_in_buffer - 1));
-        cessb_lookahead_buf.blocks_in_buffer--;
-        return 1;
-    }
-    return 0;
-}
-
-// Simple soft clipper for gentle limiting
-static float soft_clip(float x, float threshold) {
-  if (fabsf(x) > threshold) {
-    return copysignf(
-        threshold + (fabsf(x) - threshold) / (1.0f + powf((fabsf(x) - threshold), 2)), x);
   }
-  return x;
-}
+  peak_magnitudes[current_buffer_index] = current_block_peak;
 
-// CESSB envelope limiter with lookahead
-// Working in frequency domain but using I and Q for real and imaginary
-// in[]: input I/Q samples (interleaved: I, Q, I, Q, ...)
-// out[]: output I/Q samples (same format)
-// len: number of samples (I/Q pairs)
-// limit: maximum allowed envelope (suggest: 0.9 to 0.99 for float)
-// lookahead: number of samples (I/Q pairs) to look ahead (suggest: 8–32)
-void cessb_envelope_limiter_lookahead(const float *in, float *out, size_t len, float limit,
-                                      int lookahead) {
-  if (lookahead < 1) lookahead = 1;
-  if (lookahead > (int)len) lookahead = (int)len;
+  IQPair* block_to_return = NULL;
 
-  // Create a buffer to hold lookahead samples' envelopes
-  float *envelopes = (float *)malloc(sizeof(float) * len);
-  if (!envelopes) return;  // Allocation failed
-
-  // Compute envelope for each sample
-  for (size_t i = 0; i < len; ++i) {
-    float I = in[2 * i];
-    float Q = in[2 * i + 1];
-    envelopes[i] = sqrtf(I * I + Q * Q);
+  // Check if we have received enough blocks to fill the lookahead window.
+  // We can start processing once the buffer is full.
+  if (blocks_processed_count >= LOOKAHEAD_SIZE - 1) {
+    // The buffer is full, so we can process and return the oldest block.
+    // In a circular buffer, the oldest block is the one after the one we just wrote to
+    int oldest_block_index = (current_buffer_index + 1) % LOOKAHEAD_SIZE;
+    // Find the largest peak across ALL blocks currently in the lookahead window.
+    float largest_peak_found = 0.0f;
+    for (int i = 0; i < LOOKAHEAD_SIZE; i++) {
+      if (peak_magnitudes[i] > largest_peak_found) {
+        largest_peak_found = peak_magnitudes[i];
+      }
+    }
+    // Determine the scaling factor
+    float scale_factor = 1.0f;  // Default to no scaling.
+    if (largest_peak_found > TARGET_PEAK) {
+      // If the largest peak found exceeds our target, calculate the
+      // necessary scaling factor to bring it down to the target level.
+      scale_factor = TARGET_PEAK / largest_peak_found;
+    }
+    // Apply the scaling factor to the OLDEST block and copy it to the output buffer.
+    for (int i = 0; i < FFT_BLOCK_SIZE; i++) {
+      output_block[i].i = lookahead_buffer[oldest_block_index][i].i * scale_factor;
+      output_block[i].q = lookahead_buffer[oldest_block_index][i].q * scale_factor;
+    }
+    block_to_return = output_block;
   }
 
-  // Perform lookahead limiting
-  for (size_t i = 0; i < len; ++i) {
-    // Find the maximum envelope over the lookahead window
-    float max_env = envelopes[i];
-    size_t end = i + lookahead;
-    if (end > len) end = len;
-    for (size_t j = i; j < end; ++j) {
-      if (envelopes[j] > max_env) max_env = envelopes[j];
-    }
-
-    float I = in[2 * i];
-    float Q = in[2 * i + 1];
-    float env = envelopes[i];
-
-    // Compute gain to prevent exceeding the limit
-    float gain = 1.0f;
-    if (max_env > limit && max_env > 0.0f) gain = limit / max_env;
-
-    // Apply soft clipping for smoother limiting
-    I = soft_clip(I * gain, limit);
-    Q = soft_clip(Q * gain, limit);
-
-    out[2 * i] = I;
-    out[2 * i + 1] = Q;
+  // Update state for the next call.
+  current_buffer_index = (current_buffer_index + 1) % LOOKAHEAD_SIZE;
+  if (blocks_processed_count < LOOKAHEAD_SIZE) {
+    blocks_processed_count++;
   }
-  free(envelopes);
+
+  return block_to_return;
 }
