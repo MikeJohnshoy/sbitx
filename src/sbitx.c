@@ -1,4 +1,4 @@
-
+nvelope
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -1781,17 +1781,17 @@ void tx_process(
 		__imag__ fft_out[i] = __imag__ fft_out[i] * ssb_val;
 	}
 
-	// add call to new CESSB lookahead processor
+	// add call to new CESSB processor
 	int n_ssb = MAX_BINS / 2;
   IQPair cessb_in[n_ssb];
   
-  // Prepare fft block to send to lookahead processor
+  // Prepare fft block to send to envelope processor
   for (int k = 0; k < n_ssb; ++k) {
       cessb_in[k].i = __real__ fft_out[k];
       cessb_in[k].q = __imag__ fft_out[k];
   }
   
-  // Send block to the lookahead processor
+  // Send block to the envelope processor
   IQPair* processed = cessb_controlled_envelope(cessb_in);
   
   if (processed != NULL) {
