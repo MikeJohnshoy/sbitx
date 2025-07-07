@@ -23,7 +23,7 @@ static int current_buffer_index = 0;
 static int blocks_processed_count = 0;
 static IQPair output_block[FFT_BLOCK_SIZE];
 
-IQPair* cessb_lookahead_process(const IQPair* cessb_in) {
+IQPair* cessb_controlled_envelope(const IQPair* cessb_in) {
   // Initialize current block peak for the lookahead stage
   float current_block_peak = 0.0f;
 
