@@ -23,6 +23,8 @@ static int current_buffer_index = 0;
 static int blocks_processed_count = 0;
 static IQPair output_block[FFT_BLOCK_SIZE];
 
+// This function performs per-sample clipping and lookahead-based
+// block scaling, followed by an not yet implemented) linear-phase FIR filter.
 IQPair* cessb_controlled_envelope(const IQPair* cessb_in) {
   // Initialize current block peak for the lookahead stage
   float current_block_peak = 0.0f;
@@ -91,6 +93,12 @@ IQPair* cessb_controlled_envelope(const IQPair* cessb_in) {
       output_block[i].i = lookahead_buffer[oldest_block_index][i].i * scale_factor;
       output_block[i].q = lookahead_buffer[oldest_block_index][i].q * scale_factor;
     }
+
+    // 
+    // FUTURE WORK: Add an optional linear-phase FIR filter
+    // if someone thinks we need it
+    //
+    
     block_to_return = output_block;
   }
 
