@@ -1792,7 +1792,7 @@ void tx_process(
   }
   
   // Send block to the lookahead processor
-  IQPair* processed = cessb_lookahead_process(cessb_in);
+  IQPair* processed = cessb_controlled_envelope(cessb_in);
   
   if (processed != NULL) {
       // Copy limited samples back into fft_out if a fully limited block is ready
