@@ -1783,8 +1783,8 @@ void tx_process(
 
 	// add call to new CESSB lookahead processor
 	int n_ssb = MAX_BINS / 2;
-	float cessb_in[MAX_BINS];
 	float limited_block[MAX_BINS];
+  IQPair cessb_in[MAX_BINS];
 	
 	// Prepare fft block to send to lookahead processor
 	for (int k = 0; k < n_ssb; ++k) {
