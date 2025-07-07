@@ -5,4 +5,4 @@ typedef struct {
   float q;
 } IQPair;
 
-int cessb_lookahead_process(const IQPair* cessb_in);
+IQPair* cessb_lookahead_process(const IQPair* cessb_in);
