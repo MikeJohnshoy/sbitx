@@ -1783,25 +1783,24 @@ void tx_process(
 
 	// add call to new CESSB lookahead processor
 	int n_ssb = MAX_BINS / 2;
-	float limited_block[MAX_BINS];
-  IQPair cessb_in[MAX_BINS];
-	
-	// Prepare fft block to send to lookahead processor
-	for (int k = 0; k < n_ssb; ++k) {
-	  cessb_in[2 * k] = __real__ fft_out[k];
-	  cessb_in[2 * k + 1] = __imag__ fft_out[k];
-	}
-	
-	// Send block to the lookahead processor
-	IQPair* processed = cessb_lookahead_process((IQPair*)cessb_in);
+  IQPair cessb_in[n_ssb];
+  
+  // Prepare fft block to send to lookahead processor
+  for (int k = 0; k < n_ssb; ++k) {
+      cessb_in[k].i = __real__ fft_out[k];
+      cessb_in[k].q = __imag__ fft_out[k];
+  }
+  
+  // Send block to the lookahead processor
+  IQPair* processed = cessb_lookahead_process(cessb_in);
+  
   if (processed != NULL) {
-    // Copy limited samples back into fft_out
-    // if a fullly limited block is ready
-    for (int k = 0; k < n_ssb; ++k) {
-        __real__ fft_out[k] = processed[k].i;
-        __imag__ fft_out[k] = processed[k].q;
-    }
-}
+      // Copy limited samples back into fft_out if a fully limited block is ready
+      for (int k = 0; k < n_ssb; ++k) {
+          __real__ fft_out[k] = processed[k].i;
+          __imag__ fft_out[k] = processed[k].q;
+      }
+  }
 	// NOTE: when no more buffers are available we should flush buffer
 	// end of addded code for CESSB
     
