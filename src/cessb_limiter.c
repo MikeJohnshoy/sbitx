@@ -5,8 +5,8 @@
 #include <string.h>  // for memset
 
 // *** tune for performance ***
-#define LOOKAHEAD_SIZE 8   // minimum of 1
-#define TARGET_PEAK 15.0f  // keep PA in linear range
+#define LOOKAHEAD_SIZE 3   // minimum of 1
+#define TARGET_PEAK 150.0f // keep PA in linear range
 // *** end of tunable values
 
 typedef struct {
