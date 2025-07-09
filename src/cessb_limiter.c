@@ -9,11 +9,6 @@
 #define TARGET_PEAK 150.0f // keep PA in linear range
 // *** end of tunable values
 
-typedef struct {
-  float i;
-  float q;
-} IQPair;
-
 #define FFT_BLOCK_SIZE 2048
 
 // --- Static Buffers for Lookahead Processing ---
@@ -22,6 +17,7 @@ static float peak_magnitudes[LOOKAHEAD_SIZE];  // peak magnitude found in each b
 static int current_buffer_index = 0;
 static int blocks_processed_count = 0;
 static IQPair output_block[FFT_BLOCK_SIZE];
+static IQPair zero_block[FFT_BLOCK_SIZE] = {0}; // zero initialized
 
 // reset buffers at start of tranmission
 void cessb_reset(void) {
@@ -59,8 +55,7 @@ IQPair* cessb_controlled_envelope(const IQPair* cessb_in) {
 
     // Now, calculate the peak for the *lookahead* stage from the potentially clipped signal
     float mag_sq_after_clip =
-        (lookahead_buffer[current_buffer_index][i].i *
-         lookahead_buffer[current_buffer_index][i].i) +
+        (lookahead_buffer[current_buffer_index][i].i * lookahead_buffer[current_buffer_index][i].i) +
         (lookahead_buffer[current_buffer_index][i].q * lookahead_buffer[current_buffer_index][i].q);
 
     // Update the peak for the current block based on the clipped values
@@ -73,7 +68,7 @@ IQPair* cessb_controlled_envelope(const IQPair* cessb_in) {
 
   // Check if we have received enough blocks to fill the lookahead window.
   // We can start processing once the buffer is full
-  IQPair* block_to_return = NULL;
+  IQPair* block_to_return;
   if (blocks_processed_count >= LOOKAHEAD_SIZE - 1) {
     // The buffer is full, so we can process and return the oldest block.
     // In a circular buffer, the oldest block is the one after the one we just wrote to
@@ -109,6 +104,9 @@ IQPair* cessb_controlled_envelope(const IQPair* cessb_in) {
     //
     
     block_to_return = output_block;
+  } else {
+    // Not enough lookahead: return a block of zeros
+    block_to_return = zero_block;
   }
 
   // Update state for the next call.
