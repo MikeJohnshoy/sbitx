@@ -23,6 +23,15 @@ static int current_buffer_index = 0;
 static int blocks_processed_count = 0;
 static IQPair output_block[FFT_BLOCK_SIZE];
 
+// reset buffers between tranmissions
+void cessb_reset(void) {
+    memset(lookahead_buffer, 0, sizeof(lookahead_buffer));
+    memset(peak_magnitudes, 0, sizeof(peak_magnitudes));
+    current_buffer_index = 0;
+    blocks_processed_count = 0;
+    memset(output_block, 0, sizeof(output_block));
+}
+
 // This function performs per-sample clipping and lookahead-based
 // block scaling, followed by a (not implemented) linear-phase FIR filter.
 IQPair* cessb_controlled_envelope(const IQPair* cessb_in) {
