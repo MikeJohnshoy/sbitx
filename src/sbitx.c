@@ -1570,6 +1570,9 @@ void tx_process(
 	int i;
 	double i_sample, q_sample, i_carrier;
 
+  // reset buffers in CESSB processor
+  cessb_reset();
+
 	// Check if browser microphone is active and use it instead of physical mic
 	int32_t browser_mic_samples[n_samples];
 	int use_browser_mic = is_browser_mic_active();
