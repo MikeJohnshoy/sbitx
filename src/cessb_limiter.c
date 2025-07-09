@@ -23,7 +23,7 @@ static int current_buffer_index = 0;
 static int blocks_processed_count = 0;
 static IQPair output_block[FFT_BLOCK_SIZE];
 
-// reset buffers between tranmissions
+// reset buffers at start of tranmission
 void cessb_reset(void) {
     memset(lookahead_buffer, 0, sizeof(lookahead_buffer));
     memset(peak_magnitudes, 0, sizeof(peak_magnitudes));
