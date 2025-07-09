@@ -1792,15 +1792,12 @@ void tx_process(
   
   // Send block to the envelope processor
   IQPair* processed = cessb_controlled_envelope(cessb_in);
-  
-  if (processed != NULL) {
-      // Copy limited samples back into fft_out if a fully limited block is ready
-      for (int k = 0; k < n_ssb; ++k) {
-          __real__ fft_out[k] = processed[k].i;
-          __imag__ fft_out[k] = processed[k].q;
-      }
+  // Copy limited samples back into fft_out if a fully limited block is ready
+  // block will be all zeros if limited block was not ready
+  for (int k = 0; k < n_ssb; ++k) {
+      __real__ fft_out[k] = processed[k].i;
+      __imag__ fft_out[k] = processed[k].q;
   }
-	// NOTE: when no more buffers are available we should flush buffer
 	// end of addded code for CESSB
     
 	// now rotate to the tx_bin
