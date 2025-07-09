@@ -1570,9 +1570,6 @@ void tx_process(
 	int i;
 	double i_sample, q_sample, i_carrier;
 
-  // reset buffers in CESSB processor
-  cessb_reset();
-
 	// Check if browser microphone is active and use it instead of physical mic
 	int32_t browser_mic_samples[n_samples];
 	int use_browser_mic = is_browser_mic_active();
@@ -2237,6 +2234,7 @@ void tr_switch(int tx_on) {
     in_tx = 1;                   // raise a flag so functions see we are in transmit mode
     sound_mixer(audio_card, "Master", 0);  // mute audio while switching to transmit
     sound_mixer(audio_card, "Capture", 0);
+    cessb_reset();  // reset buffers in CESSB processor
 		if (rx_list->mode != MODE_CW && rx_list->mode != MODE_CWR) {
 		delay(20);
 	}
