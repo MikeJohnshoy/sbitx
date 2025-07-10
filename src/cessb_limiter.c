@@ -3,15 +3,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>  // for memset
+#include "cessb_limiter.h"
 
-// *** tune for performance ***
+//  *** tune for performance ***
 #define LOOKAHEAD_SIZE 3   // minimum of 1
 #define TARGET_PEAK 150.0f // keep PA in linear range
-// *** end of tunable values
+//  *** end of tunable values
 
 #define FFT_BLOCK_SIZE 2048
 
-// --- Static Buffers for Lookahead Processing ---
+// static buffers for lookahead processing
 static IQPair lookahead_buffer[LOOKAHEAD_SIZE][FFT_BLOCK_SIZE];
 static float peak_magnitudes[LOOKAHEAD_SIZE];  // peak magnitude found in each block
 static int current_buffer_index = 0;
@@ -19,7 +20,7 @@ static int blocks_processed_count = 0;
 static IQPair output_block[FFT_BLOCK_SIZE];
 static IQPair zero_block[FFT_BLOCK_SIZE] = {0}; // zero initialized
 
-// reset buffers at start of tranmission
+// reset buffers at start of transmission
 void cessb_reset(void) {
     memset(lookahead_buffer, 0, sizeof(lookahead_buffer));
     memset(peak_magnitudes, 0, sizeof(peak_magnitudes));
