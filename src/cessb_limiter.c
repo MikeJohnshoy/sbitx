@@ -7,9 +7,9 @@
 #include "cessb_limiter.h"
 
 // *** Tune for performance ***
-#define LOOKAHEAD_SIZE 3              // Minimum of 1. More gives smoother gain control.
-#define LOOKAHEAD_TARGET_PEAK 150.0f  // The desired final peak level for smooth scaling.
-#define HARD_CLIP_LIMIT 155.0f        // A final safety net, slightly > LOOKAHEAD_TARGET_PEAK.
+#define LOOKAHEAD_SIZE 4              // minimum of 1
+#define LOOKAHEAD_TARGET_PEAK 10.0f  // desired final peak level for smooth scaling.
+#define HARD_CLIP_LIMIT 10.5f        // slightly > LOOKAHEAD_TARGET_PEAK.
 // *** End of tunable values ***
 
 #define FFT_BLOCK_SIZE 2048
@@ -31,40 +31,39 @@ void cessb_reset(void) {
 }
 
 IQPair* cessb_controlled_envelope(const IQPair* cessb_in) {
-  // --- Stage 1: Analyze RAW input and populate the lookahead buffer ---
+  // --- analyze new input and populate the lookahead buffer ---
   float current_block_raw_peak = 0.0f;
   for (int i = 0; i < FFT_BLOCK_SIZE; i++) {
     // Store the original, unmodified sample in the lookahead buffer
     lookahead_buffer[current_buffer_index][i] = cessb_in[i];
-
-    // Find the peak magnitude from the RAW, UNCLIPPED input signal
+    // Find the peak magnitude from the new, unclipped input signal
     float current_mag_sq = (cessb_in[i].i * cessb_in[i].i) + (cessb_in[i].q * cessb_in[i].q);
     if (current_mag_sq > (current_block_raw_peak * current_block_raw_peak)) {
       current_block_raw_peak = sqrtf(current_mag_sq);
     }
   }
-  // Store the peak of the raw block for future scaling decisions
+  // Store the peak of the new block for future scaling decisions
   peak_magnitudes[current_buffer_index] = current_block_raw_peak;
 
   IQPair* block_to_return;
   if (blocks_processed_count >= LOOKAHEAD_SIZE - 1) {
-    // --- Stage 2: Calculate Scaling Factor based on the lookahead window ---
-
-    // Find the largest peak across ALL raw blocks currently in the lookahead window.
+    // lookahead buffer has been filled
+    // --- calculate scaling factor based on the lookahead window ---
+    // Find the largest peak across all blocks currently in the lookahead window
     float largest_peak_in_window = 0.0f;
     for (int i = 0; i < LOOKAHEAD_SIZE; i++) {
       if (peak_magnitudes[i] > largest_peak_in_window) {
         largest_peak_in_window = peak_magnitudes[i];
       }
     }
-
-    // Determine the overall scaling factor to bring the window's max peak to our target.
+    // Determine the overall scaling factor to bring the window's max peak to our target
     float scale_factor = 1.0f;  // Default to no scaling.
     if (largest_peak_in_window > LOOKAHEAD_TARGET_PEAK) {
       scale_factor = LOOKAHEAD_TARGET_PEAK / largest_peak_in_window;
     }
 
-    // --- Stage 3: Apply Scaling and Final Clipping to the OLDEST block ---
+    // --- apply scaling and final Clipping to the OLDEST block ---
+    // which is next one in circular queue
     int oldest_block_index = (current_buffer_index + 1) % LOOKAHEAD_SIZE;
     for (int i = 0; i < FFT_BLOCK_SIZE; i++) {
       // Apply the calculated gentle scaling
@@ -97,6 +96,5 @@ IQPair* cessb_controlled_envelope(const IQPair* cessb_in) {
   if (blocks_processed_count < LOOKAHEAD_SIZE) {
     blocks_processed_count++;
   }
-
   return block_to_return;
 }
