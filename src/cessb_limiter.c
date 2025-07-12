@@ -22,6 +22,7 @@ static int blocks_processed_count = 0;
 static IQPair output_block[FFT_BLOCK_SIZE];
 static IQPair zero_block[FFT_BLOCK_SIZE] = {0};  // Zero initialized
 
+// called by T/R switch at start of every transmission
 void cessb_reset(void) {
   memset(lookahead_buffer, 0, sizeof(lookahead_buffer));
   memset(peak_magnitudes, 0, sizeof(peak_magnitudes));
@@ -31,7 +32,7 @@ void cessb_reset(void) {
 }
 
 IQPair* cessb_controlled_envelope(const IQPair* cessb_in) {
-  // --- analyze new input and populate the lookahead buffer ---
+  // put new block in lookahead buffer and find peak
   float current_block_raw_peak = 0.0f;
   for (int i = 0; i < FFT_BLOCK_SIZE; i++) {
     // Store the original, unmodified sample in the lookahead buffer
@@ -42,13 +43,12 @@ IQPair* cessb_controlled_envelope(const IQPair* cessb_in) {
       current_block_raw_peak = sqrtf(current_mag_sq);
     }
   }
-  // Store the peak of the new block for future scaling decisions
+  // store the peak of the new block for future scaling decisions
   peak_magnitudes[current_buffer_index] = current_block_raw_peak;
 
   IQPair* block_to_return;
   if (blocks_processed_count >= LOOKAHEAD_SIZE - 1) {
     // lookahead buffer has been filled
-    // --- calculate scaling factor based on the lookahead window ---
     // Find the largest peak across all blocks currently in the lookahead window
     float largest_peak_in_window = 0.0f;
     for (int i = 0; i < LOOKAHEAD_SIZE; i++) {
@@ -56,14 +56,14 @@ IQPair* cessb_controlled_envelope(const IQPair* cessb_in) {
         largest_peak_in_window = peak_magnitudes[i];
       }
     }
-    // Determine the overall scaling factor to bring the window's max peak to our target
+    // determine the overall scaling factor to bring the window's max peak to our target
     float scale_factor = 1.0f;  // Default to no scaling.
     if (largest_peak_in_window > LOOKAHEAD_TARGET_PEAK) {
       scale_factor = LOOKAHEAD_TARGET_PEAK / largest_peak_in_window;
     }
 
-    // --- apply scaling and final Clipping to the OLDEST block ---
-    // which is next one in circular queue
+    // scale all the I/Q pairs in the OLDEST block ---
+    // which is next block in circular queue
     int oldest_block_index = (current_buffer_index + 1) % LOOKAHEAD_SIZE;
     for (int i = 0; i < FFT_BLOCK_SIZE; i++) {
       // Apply the calculated gentle scaling
@@ -71,7 +71,7 @@ IQPair* cessb_controlled_envelope(const IQPair* cessb_in) {
       scaled_sample.i = lookahead_buffer[oldest_block_index][i].i * scale_factor;
       scaled_sample.q = lookahead_buffer[oldest_block_index][i].q * scale_factor;
 
-      // Apply the hard clipper as a final safety measure
+      // apply the hard clipper as a final safety measure
       float scaled_mag =
           sqrtf((scaled_sample.i * scaled_sample.i) + (scaled_sample.q * scaled_sample.q));
       if (scaled_mag > HARD_CLIP_LIMIT) {
@@ -83,7 +83,7 @@ IQPair* cessb_controlled_envelope(const IQPair* cessb_in) {
       }
     }
 
-    // FUTURE WORK: Optional linear-phase FIR filter would go here.
+    // FUTURE WORK: possible FIR filter would go here
 
     block_to_return = output_block;
   } else {
