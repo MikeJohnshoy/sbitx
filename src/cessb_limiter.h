@@ -1,8 +1,8 @@
 #include <stddef.h>
 
 typedef struct {
-  float i;
-  float q;
+  double i;
+  double q;
 } IQPair;
 
 void cessb_reset(void);
