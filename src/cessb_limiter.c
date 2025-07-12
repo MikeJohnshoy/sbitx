@@ -7,9 +7,9 @@
 #include "cessb_limiter.h"
 
 // *** Tune for performance ***
-#define LOOKAHEAD_SIZE 4              // minimum of 1
+#define LOOKAHEAD_SIZE 4          // minimum of 1
 #define LOOKAHEAD_TARGET_PEAK 10.0f  // desired final peak level for smooth scaling.
-#define HARD_CLIP_LIMIT 10.5f        // slightly > LOOKAHEAD_TARGET_PEAK.
+#define HARD_CLIP_LIMIT 10.5f      // slightly > LOOKAHEAD_TARGET_PEAK.
 // *** End of tunable values ***
 
 #define FFT_BLOCK_SIZE 2048
@@ -62,6 +62,11 @@ IQPair* cessb_controlled_envelope(const IQPair* cessb_in) {
       scale_factor = LOOKAHEAD_TARGET_PEAK / largest_peak_in_window;
     }
 
+    // VALUES FOR DEBUGGING ONLY
+    // Initialize peak trackers for scaled and clipped output
+    float peak_after_scaling = 0.0f;
+    float peak_after_clipping = 0.0f;
+
     // scale all the I/Q pairs in the OLDEST block ---
     // which is next block in circular queue
     int oldest_block_index = (current_buffer_index + 1) % LOOKAHEAD_SIZE;
@@ -71,21 +76,42 @@ IQPair* cessb_controlled_envelope(const IQPair* cessb_in) {
       scaled_sample.i = lookahead_buffer[oldest_block_index][i].i * scale_factor;
       scaled_sample.q = lookahead_buffer[oldest_block_index][i].q * scale_factor;
 
-      // apply the hard clipper as a final safety measure
-      float scaled_mag =
+      // VALUES FOR DEBUGGING ONLY
+      // Track peak after scaling
+      float current_scaled_mag =
           sqrtf((scaled_sample.i * scaled_sample.i) + (scaled_sample.q * scaled_sample.q));
-      if (scaled_mag > HARD_CLIP_LIMIT) {
-        float clip_factor = HARD_CLIP_LIMIT / scaled_mag;
+      if (current_scaled_mag > peak_after_scaling) {
+        peak_after_scaling = current_scaled_mag;
+      }
+
+      // apply the hard clipper as a final safety measure
+      if (current_scaled_mag > HARD_CLIP_LIMIT) {
+        float clip_factor = HARD_CLIP_LIMIT / current_scaled_mag;
         output_block[i].i = scaled_sample.i * clip_factor;
         output_block[i].q = scaled_sample.q * clip_factor;
       } else {
         output_block[i] = scaled_sample;
+      }
+
+      // VALUES FOR DEBUGGING ONLY
+      // Track peak after clipping
+      float current_output_mag =
+          sqrtf((output_block[i].i * output_block[i].i) + (output_block[i].q * output_block[i].q));
+      if (current_output_mag > peak_after_clipping) {
+        peak_after_clipping = current_output_mag;
       }
     }
 
     // FUTURE WORK: possible FIR filter would go here
 
     block_to_return = output_block;
+
+    // FOR DEBUGGING ONLY
+    // LOGGING ADDITION
+    printf("Peaks: Input=%.4f, Scaled=%.4f, Clipped=%.4f\n",
+           current_block_raw_peak, peak_after_scaling, peak_after_clipping);
+    // ***********************
+
   } else {
     // Not enough lookahead data yet; return silence.
     block_to_return = zero_block;
