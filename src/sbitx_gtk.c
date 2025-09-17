@@ -7064,6 +7064,14 @@ gboolean ui_tick(gpointer gook)
 	}
 
 	int scroll = enc_read(&enc_a);
+	
+	// Check for inactivity timeout first
+	if (!mfk_locked_to_volume && mfk_last_ms > 0 && 
+		(sbitx_millis() - mfk_last_ms) > MFK_TIMEOUT_MS)
+	{
+		mfk_locked_to_volume = 1;
+	}
+	
 	if (scroll)
 	{
 		// Update last activity time whenever enc_a moves
@@ -7082,13 +7090,6 @@ gboolean ui_tick(gpointer gook)
 			else
 				edit_field(f_focus, MIN_KEY_UP);
 		}
-	}
-	
-	// Check for inactivity timeout
-	if (!mfk_locked_to_volume && mfk_last_ms > 0 && 
-		(sbitx_millis() - mfk_last_ms) > MFK_TIMEOUT_MS)
-	{
-		mfk_locked_to_volume = 1;
 	}
 	
 	return TRUE;
