@@ -225,6 +225,12 @@ struct font_style font_table[] = {
 
 struct encoder enc_a, enc_b;
 
+// MFK timeout state variables
+static int mfk_locked_to_volume = 0;     // 0 = multi-function, 1 = volume lock  
+static unsigned long mfk_last_ms = 0;    // last time enc_a moved
+static const unsigned long MFK_TIMEOUT_MS = 15000UL; // 15 seconds
+static int enc1_sw_prev = 1;             // previous ENC1_SW state (pulled-up idle = 1)
+
 #define MAX_FIELD_LENGTH 128
 
 #define FIELD_NUMBER 0
@@ -5752,6 +5758,9 @@ static gboolean on_key_release(GtkWidget *widget, GdkEventKey *event, gpointer u
 
 static gboolean on_key_press(GtkWidget *widget, GdkEventKey *event, gpointer user_data)
 {
+	// Reset MFK timeout on keyboard interaction
+	mfk_locked_to_volume = 0;
+	mfk_last_ms = sbitx_millis();
 
 	// Process tabs and arrow keys seperately, as the native tab indexing doesn't seem to work; dunno why.  -n1qm
 	if (f_focus)
@@ -6059,6 +6068,9 @@ static gboolean on_mouse_press(GtkWidget *widget, GdkEventButton *event, gpointe
 	}
 	else if (event->type == GDK_BUTTON_PRESS /*&& event->button == GDK_BUTTON_PRIMARY*/)
 	{
+		// Reset MFK timeout on mouse interaction
+		mfk_locked_to_volume = 0;
+		mfk_last_ms = sbitx_millis();
 
 		// printf("mouse event at %d, %d\n", (int)(event->x), (int)(event->y));
 		for (int i = 0; active_layout[i].cmd[0] > 0; i++)
@@ -6454,6 +6466,24 @@ void oled_toggle_band()
 		change_band("80M");
 	else
 		change_band(band_stack[band_now + 1].name);
+}
+
+// Helper function to adjust volume for MFK lock mode
+static void mfk_adjust_volume(int steps) {
+	struct field *f = get_field("r1:volume");
+	if (!f) return;
+	
+	int v = atoi(f->value);
+	v += steps;
+	if (v < f->min) v = f->min;
+	if (v > f->max) v = f->max;
+	
+	sprintf(f->value, "%d", v);
+	update_field(f);
+	
+	char buff[20];
+	sprintf(buff, "r1:volume=%d", v);
+	sdr_request(buff, buff); // reuse buffer for response
 }
 
 void hw_init()
@@ -7034,13 +7064,40 @@ gboolean ui_tick(gpointer gook)
 			tx_off();
 	}
 
+	// MFK handling with timeout and ENC1_SW press detection
 	int scroll = enc_read(&enc_a);
-	if (scroll && f_focus)
-	{
-		if (scroll < 0)
-			edit_field(f_focus, MIN_KEY_DOWN);
-		else
-			edit_field(f_focus, MIN_KEY_UP);
+	
+	// Check for ENC1_SW press edge (1->0 transition)
+	int enc1_sw_now = digitalRead(ENC1_SW);
+	if (enc1_sw_now == 0 && enc1_sw_prev != 0) { // pressed edge
+		mfk_locked_to_volume = 0;
+		mfk_last_ms = sbitx_millis();
+	}
+	enc1_sw_prev = enc1_sw_now;
+	
+	if (scroll) {
+		// Update last activity timestamp
+		mfk_last_ms = sbitx_millis();
+		
+		if (mfk_locked_to_volume) {
+			// MFK is locked to volume, adjust volume
+			if (scroll < 0)
+				mfk_adjust_volume(-1);
+			else
+				mfk_adjust_volume(1);
+		}
+		else if (f_focus) {
+			// Normal multi-function behavior
+			if (scroll < 0)
+				edit_field(f_focus, MIN_KEY_DOWN);
+			else
+				edit_field(f_focus, MIN_KEY_UP);
+		}
+	}
+	
+	// Check for MFK timeout (15 seconds of inactivity)
+	if (!mfk_locked_to_volume && (sbitx_millis() - mfk_last_ms) > MFK_TIMEOUT_MS) {
+		mfk_locked_to_volume = 1;
 	}
 	
 	return TRUE;
@@ -8197,6 +8254,9 @@ int main(int argc, char *argv[])
 	ui_init(argc, argv);
 	hw_init();
 	console_init();
+
+	// Initialize MFK timestamp
+	mfk_last_ms = sbitx_millis();
 
 	q_init(&q_remote_commands, 1000); // not too many commands
 	q_init(&q_tx_text, 100);		  // best not to have a very large q
