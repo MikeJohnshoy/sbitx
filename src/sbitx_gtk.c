@@ -225,6 +225,11 @@ struct font_style font_table[] = {
 
 struct encoder enc_a, enc_b;
 
+// MFK timeout state
+static int mfk_locked_to_volume = 0;        // 0 = multi-function, 1 = volume lock
+static unsigned long mfk_last_ms = 0;       // last time enc_a moved
+static const unsigned long MFK_TIMEOUT_MS = 15000UL; // 15 seconds
+
 #define MAX_FIELD_LENGTH 128
 
 #define FIELD_NUMBER 0
@@ -3928,6 +3933,24 @@ static void hover_field(struct field *f)
 	update_field(f);
 }
 
+// Helper function to adjust volume via MFK when locked
+static void mfk_adjust_volume(int steps)
+{
+	struct field *f = get_field("r1:volume");
+	if (!f) return;
+	
+	int v = atoi(f->value);
+	v += steps;
+	if (v < f->min) v = f->min;
+	if (v > f->max) v = f->max;
+	sprintf(f->value, "%d", v);
+	update_field(f);
+	
+	char buff[20], response[20];
+	sprintf(buff, "r1:volume=%d", v);
+	sdr_request(buff, response);
+}
+
 // respond to a UI request to change the field value
 static void edit_field(struct field *f, int action)
 {
@@ -5752,6 +5775,9 @@ static gboolean on_key_release(GtkWidget *widget, GdkEventKey *event, gpointer u
 
 static gboolean on_key_press(GtkWidget *widget, GdkEventKey *event, gpointer user_data)
 {
+	// Unlock MFK on any key press
+	mfk_locked_to_volume = 0;
+	mfk_last_ms = sbitx_millis();
 
 	// Process tabs and arrow keys seperately, as the native tab indexing doesn't seem to work; dunno why.  -n1qm
 	if (f_focus)
@@ -6059,6 +6085,9 @@ static gboolean on_mouse_press(GtkWidget *widget, GdkEventButton *event, gpointe
 	}
 	else if (event->type == GDK_BUTTON_PRESS /*&& event->button == GDK_BUTTON_PRIMARY*/)
 	{
+		// Unlock MFK on any mouse press
+		mfk_locked_to_volume = 0;
+		mfk_last_ms = sbitx_millis();
 
 		// printf("mouse event at %d, %d\n", (int)(event->x), (int)(event->y));
 		for (int i = 0; active_layout[i].cmd[0] > 0; i++)
@@ -7035,12 +7064,31 @@ gboolean ui_tick(gpointer gook)
 	}
 
 	int scroll = enc_read(&enc_a);
-	if (scroll && f_focus)
+	if (scroll)
 	{
-		if (scroll < 0)
-			edit_field(f_focus, MIN_KEY_DOWN);
-		else
-			edit_field(f_focus, MIN_KEY_UP);
+		// Update last activity time whenever enc_a moves
+		mfk_last_ms = sbitx_millis();
+		
+		if (mfk_locked_to_volume)
+		{
+			// MFK is locked to volume control
+			mfk_adjust_volume(scroll);
+		}
+		else if (f_focus)
+		{
+			// Normal multi-function behavior
+			if (scroll < 0)
+				edit_field(f_focus, MIN_KEY_DOWN);
+			else
+				edit_field(f_focus, MIN_KEY_UP);
+		}
+	}
+	
+	// Check for inactivity timeout
+	if (!mfk_locked_to_volume && mfk_last_ms > 0 && 
+		(sbitx_millis() - mfk_last_ms) > MFK_TIMEOUT_MS)
+	{
+		mfk_locked_to_volume = 1;
 	}
 	
 	return TRUE;
@@ -7093,6 +7141,10 @@ void ui_init(int argc, char *argv[])
 	gtk_widget_show_all(window);
 	layout_ui();
 	focus_field(get_field("r1:volume"));
+	
+	// Initialize MFK timer
+	mfk_last_ms = sbitx_millis();
+	
 	webserver_start();
 	f_last_text = get_field_by_label("TEXT");
 }
