@@ -59,6 +59,7 @@ The initial sync between the gui values, the core radio values, settings, et al 
 #include "calibration_ui.h"
 #include "swr_monitor.h"
 #include <time.h>
+#include "cessb.h"
 extern int get_rx_gain(void);
 extern int calculate_s_meter(struct rx *r, double rx_gain);
 extern struct rx *rx_list;
@@ -739,6 +740,7 @@ int do_bfo_offset(struct field *f, cairo_t *gfx, int event, int a, int b, int c)
 int do_rit_control(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
 int do_zero_beat_sense_edit(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
 int do_dropdown(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
+int do_cessb_edit(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
 int do_band_dropdown(struct field *f, cairo_t *gfx, int event, int a, int b, int c);
 struct band *get_band_by_frequency(int frequency);
 static void set_ftx_frequency(int mode);
@@ -1073,6 +1075,10 @@ struct field main_controls[] = {
 	{"#comp_plugin", do_comp_edit, 1000, -1000, 40, 40, "COMP", 40, "0", FIELD_SELECTION, STYLE_FIELD_VALUE,
 	 "10/9/8/7/6/5/4/3/2/1/0", 0, 0, 0, 0},
 
+  // CESSB (Controlled Envelope SSB) Control
+	{"#cessb_plugin", do_cessb_edit, 1000, -1000, 40, 40, "CESSB", 40, "OFF", FIELD_TOGGLE, STYLE_FIELD_VALUE,
+	 "ON/OFF", 0, 0, 0, VOICE_CONTROL},
+
 	// BFO Control
 	{"#bfo_manual_offset", do_bfo_offset, 1000, -1000, 40, 40, "BFO", 80, "0", FIELD_NUMBER, STYLE_FIELD_VALUE,
 	 "", -3000, 3000, 50, 0},
@@ -1378,7 +1384,13 @@ int set_field(const char *id, const char *value)
 	sprintf(buff, "%s %s", f->label, f->value);
 	do_control_action(buff);
 
+  // mark field for redraw / remote update
 	update_field(f);
+  // if this field has a handler and is off-screen, invoke it immediately
+  // so off-screen toggles (like #cessb_plugin) actually take effect
+  if (f->fn && f->y < 0) {
+      f->fn(f, NULL, FIELD_EDIT, 0, 0, 0);
+  }
 	return 0;
 }
 
@@ -7329,6 +7341,31 @@ int do_comp_edit(struct field *f, cairo_t *gfx, int event, int a, int b, int c)
 	return 0;
 }
 
+// CESSB (Controlled Envelope SSB) toggle handler
+int do_cessb_edit(struct field *f, cairo_t *gfx, int event, int a, int b, int c)
+{
+	const char *cessb_field = field_str("CESSB");
+ // report current status if ON or OFF not specified
+  if (!cessb_field) {
+      printf("CESSB is currently %s\n", cessb_enabled ? "ON" : "OFF");
+      return 0;
+  }
+  if (!strcasecmp(cessb_field, "ON")) {
+      cessb_enabled = 1;
+      cessb_set_enabled(&cessb_processor, 1);
+      printf("CESSB enabled\n");
+      write_console(STYLE_LOG, "CESSB enabled\n");
+  } else if (!strcasecmp(cessb_field, "OFF")) {
+      cessb_enabled = 0;
+      cessb_set_enabled(&cessb_processor, 0);
+      printf("CESSB disabled\n");
+      write_console(STYLE_LOG, "CESSB disabled\n");
+  } else {
+      printf("do_cessb_edit: ignored unknown CESSB value '%s'\n", cessb_field);
+  }
+  return 0;
+}
+
 int do_txmon_edit(struct field *f, cairo_t *gfx, int event, int a, int b, int c)
 {
 	const char *txmon_control_field = field_str("TXMON");
@@ -10691,6 +10728,15 @@ else if (!strcasecmp(exec, "decode"))
 		save_user_settings(1);
 		exit(0);
 	}
+  else if (!strcasecmp(exec, "cessb")) {
+    if (!strlen(args)) {
+      printf("CESSB is currently %s\n", cessb_enabled ? "ON" : "OFF");
+    } else if (!strcasecmp(args, "on")) {
+        set_field("#cessb_plugin", "ON");
+    } else if (!strcasecmp(args, "off")) {
+        set_field("#cessb_plugin", "OFF");
+    } 
+  }
 	else if (!strcasecmp(exec, "qrz"))
 	{
 		if (strlen(args))
