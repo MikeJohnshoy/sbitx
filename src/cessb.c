@@ -6,25 +6,25 @@
 // This chain follows the three-stage CESSB summary:
 // 1) Prefilter and peak-limit the audio input before the Hilbert transform.
 // 2) Baseband “RF” clipping on the analytic I/Q via magnitude clipping.
-// 3) Overshoot compensation using a look-ahead envelope limiter with
-//    attack/release smoothing, plus a hard envelope cap, and final post-LPF
-//    and soft-clip guard on the real output.
+// 3) Overshoot compensation using a per-sample look-ahead envelope limiter with
+//    attack/release smoothing, a hard envelope cap, post-LPF, and a soft-clip
+//    guard on the real output.
 //
-// Concept: get audio samples in blocks, apply CESSB process, return them.
-// - Build analytic I and Q and envelope for every sample in CURRENT input block.
-// - Apply Stage 1 (prefilter + peak limit on audio) before Hilbert/delay.
-// - Apply Stage 2 (magnitude clip on analytic I/Q) to reduce Hilbert overshoot.
-// - Apply Stage 3 (overshoot compensation): compute per-sample gain with a
-//   look-ahead window (LA samples spanning previous+current), smooth gain
+// Concept: process audio in blocks, but compute gain per sample with a sliding
+// look-ahead window (LA samples) using a ring buffer. Output is delayed by
+// (LA-1) samples (≈1 ms for each 96 samples at 96kHz).
+// - Build analytic I/Q and envelope per sample.
+// - Stage 1: prefilter + peak limit on audio before Hilbert/delay.
+// - Stage 2: magnitude clip on analytic I/Q to reduce Hilbert overshoot.
+// - Stage 3: per-sample look-ahead gain from a sliding window, smooth
 //   (attack/release), hard-cap envelope if needed, post-filter the real part,
-//   and guard soft-clip on the final output.
-// - Process each sample of the PREVIOUS block sequentially with its gain and
-//   guards. Output the processed PREVIOUS block.
-// - Shift the pipeline: the CURRENT block becomes the PREVIOUS block.
+//   and soft-clip guard the final output.
+// - The ring buffer preserves continuity across blocks; no block-edge gain
+//   steps, and the initial latency is just the (LA-1)-sample delay.
 //
 // Assumptions:
 // - num_samples <= 1024 (matches sbitx tx_process block sizing)
-// - sample_rate is constant (96kHz)
+// - sample_rate is constant (96 kHz)
 //
 // added by Mike KB2ML and Bob KD8CGH
 
@@ -457,4 +457,5 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->average_power_in = 0.0f;
   state->average_power_out = 0.0f;
 }
+
 
