@@ -3,24 +3,25 @@
 // Implementation based on the technique described by David Hershberger, W9GR
 // in QEX November/December 2014: "Controlled Envelope Single Sideband".
 //
-// This chain follows the three-stage CESSB summary:
+// Three-stage CESSB chain:
 // 1) Prefilter and peak-limit the audio input before the Hilbert transform.
 // 2) Baseband “RF” clipping on the analytic I/Q via magnitude clipping.
 // 3) Overshoot compensation using a per-sample look-ahead envelope limiter with
 //    attack/release smoothing, a hard envelope cap, post-LPF, and a soft-clip
 //    guard on the real output.
 //
-// Concept: process audio in blocks, but compute gain per sample with a sliding
-// look-ahead window (LA samples) using a ring buffer. Output is delayed by
-// (LA-1) samples (≈1 ms for each 96 samples at 96kHz).
+// Concept (streaming):
+// - Process blocks from the caller, but internally treat samples as a stream.
+// - Fixed look-ahead window of LA samples (≈1 ms at 96 kHz) with a delay line.
+// - One input sample produces one output sample after the LA-sample delay.
 // - Build analytic I/Q and envelope per sample.
 // - Stage 1: prefilter + peak limit on audio before Hilbert/delay.
 // - Stage 2: magnitude clip on analytic I/Q to reduce Hilbert overshoot.
-// - Stage 3: per-sample look-ahead gain from a sliding window, smooth
+// - Stage 3: per-sample look-ahead gain from the window, smooth
 //   (attack/release), hard-cap envelope if needed, post-filter the real part,
 //   and soft-clip guard the final output.
-// - The ring buffer preserves continuity across blocks; no block-edge gain
-//   steps, and the initial latency is just the (LA-1)-sample delay.
+// - Initial fill: the first LA samples output as zeros; steady-state emits
+//   one-in/one-out with constant LA latency.
 //
 // Assumptions:
 // - num_samples <= 1024 (matches sbitx tx_process block sizing)
@@ -443,3 +444,4 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->average_power_in = 0.0f;
   state->average_power_out = 0.0f;
 }
+
