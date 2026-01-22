@@ -63,6 +63,10 @@ static int   la_buf_head = 0;   // index of oldest sample
 static int   la_buf_len  = 0;   // number of valid samples in buffer
 // Smoothed gain state (continuous across blocks)
 static float la_gain = 1.0f;
+// Output FIFO to avoid dropping first-block / block-tail samples
+static float out_fifo[CESSB_RING_MAX];
+static int   out_fifo_head = 0; // index of oldest pending output
+static int   out_fifo_len  = 0; // number of valid outputs in FIFO
 
 static inline void cessb_la_block_reset(void) {
   la_buf_head = 0;
@@ -71,6 +75,9 @@ static inline void cessb_la_block_reset(void) {
   memset(la_buf_i, 0, sizeof(la_buf_i));
   memset(la_buf_q, 0, sizeof(la_buf_q));
   memset(la_buf_env, 0, sizeof(la_buf_env));
+  out_fifo_head = 0;
+  out_fifo_len = 0;
+  memset(out_fifo, 0, sizeof(out_fifo));
 }
 
 // Hilbert transform coefficients (127-tap equiripple FIR, Type IV)
@@ -202,8 +209,6 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples,
   float cur_i[CESSB_BLOCK_MAX];
   float cur_q[CESSB_BLOCK_MAX];
   float cur_env[CESSB_BLOCK_MAX];
-  float out_block[CESSB_BLOCK_MAX];
-  memset(out_block, 0, sizeof(float) * (size_t)num_samples);
 
   // Stats accumulators
   float peak_in = 0.0f, peak_out = 0.0f;
@@ -302,10 +307,14 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples,
                               post_alpha * state->post_lpf_state;
       float output = soft_clip(state->post_lpf_state, CESSB_OUTPUT_GUARD);
 
-      // Output slot is delayed by (LA-1) samples relative to current n
-      int out_slot = n - (CESSB_LA_SAMPLES - 1);
-      if (out_slot >= 0 && out_slot < num_samples) {
-        out_block[out_slot] = output;
+      // Queue the output; it will be drained to the caller after processing.
+      int fifo_pos = (out_fifo_head + out_fifo_len) % CESSB_RING_MAX;
+      out_fifo[fifo_pos] = output;
+      if (out_fifo_len < CESSB_RING_MAX) {
+        out_fifo_len++;
+      } else {
+        // Should not occur with current sizing, but guard against overflow.
+        out_fifo_head = (out_fifo_head + 1) % CESSB_RING_MAX;
       }
 
       // Pop head
@@ -321,8 +330,15 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples,
   }
 
   // Write outputs (leading (LA-1) samples of the first call will be zero, not a whole block)
-  for (int i = 0; i < num_samples; i++) {
-    samples[i] = out_block[i];
+   int to_emit = (out_fifo_len < num_samples) ? out_fifo_len : num_samples;
+  for (int i = 0; i < to_emit; i++) {
+    samples[i] = out_fifo[out_fifo_head];
+    out_fifo_head = (out_fifo_head + 1) % CESSB_RING_MAX;
+  }
+  out_fifo_len -= to_emit;
+  // If pipeline not yet full, pad leading part of the block with zeros
+  for (int i = to_emit; i < num_samples; i++) {
+    samples[i] = 0.0f;
   }
 
   // update statistics
@@ -457,5 +473,6 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->average_power_in = 0.0f;
   state->average_power_out = 0.0f;
 }
+
 
 
