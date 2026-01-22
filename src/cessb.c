@@ -55,29 +55,21 @@ static int debug_have_ts = 0;
 int cessb_enabled = 0;
 cessb_state_t cessb_processor;
 
-// Sliding-window look-ahead ring buffers (cross-block continuity)
-static float la_buf_i[CESSB_RING_MAX];
-static float la_buf_q[CESSB_RING_MAX];
-static float la_buf_env[CESSB_RING_MAX];
-static int   la_buf_head = 0;   // index of oldest sample
-static int   la_buf_len  = 0;   // number of valid samples in buffer
-// Smoothed gain state (continuous across blocks)
-static float la_gain = 1.0f;
-// Output FIFO to avoid dropping first-block / block-tail samples
-static float out_fifo[CESSB_RING_MAX];
-static int   out_fifo_head = 0; // index of oldest pending output
-static int   out_fifo_len  = 0; // number of valid outputs in FIFO
+// Look-ahead window (length = CESSB_LA_SAMPLES) for streaming processing
+static float la_ring_i[CESSB_LA_SAMPLES];
+static float la_ring_q[CESSB_LA_SAMPLES];
+static float la_ring_env[CESSB_LA_SAMPLES];
+static int   la_head = 0;      // index of oldest sample in window
+static int   la_len  = 0;      // number of samples currently buffered
+static float la_gain = 1.0f;   // smoothed gain state
 
 static inline void cessb_la_block_reset(void) {
-  la_buf_head = 0;
-  la_buf_len = 0;
+  la_head = 0;
+  la_len = 0;
   la_gain = 1.0f;
-  memset(la_buf_i, 0, sizeof(la_buf_i));
-  memset(la_buf_q, 0, sizeof(la_buf_q));
-  memset(la_buf_env, 0, sizeof(la_buf_env));
-  out_fifo_head = 0;
-  out_fifo_len = 0;
-  memset(out_fifo, 0, sizeof(out_fifo));
+  memset(la_ring_i, 0, sizeof(la_ring_i));
+  memset(la_ring_q, 0, sizeof(la_ring_q));
+  memset(la_ring_env, 0, sizeof(la_ring_env));
 }
 
 // Hilbert transform coefficients (127-tap equiripple FIR, Type IV)
@@ -198,17 +190,16 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples,
   // Precompute constants
   const float post_alpha =
       expf(-2.0f * (float)M_PI * CESSB_POST_LPF_CUTOFF / sample_rate);
-  const float att_a =
-      expf(-(1.0f / (0.001f * CESSB_GAIN_ATTACK_MS)) / sample_rate);
-  const float rel_a =
-      expf(-(1.0f / (0.001f * CESSB_GAIN_RELEASE_MS)) / sample_rate);
-  const float audio_alpha =
-      expf(-2.0f * (float)M_PI * CESSB_AUDIO_PRE_FC / sample_rate);
+  const float att_a = expf(-(1.0f / (0.001f * CESSB_GAIN_ATTACK_MS)) / sample_rate);
+  const float rel_a = expf(-(1.0f / (0.001f * CESSB_GAIN_RELEASE_MS)) / sample_rate);
+  const float audio_alpha = expf(-2.0f * (float)M_PI * CESSB_AUDIO_PRE_FC / sample_rate);
 
   // Stage buffers
   float cur_i[CESSB_BLOCK_MAX];
   float cur_q[CESSB_BLOCK_MAX];
   float cur_env[CESSB_BLOCK_MAX];
+  int outputs_emitted = 0;
+  int out_pos = 0;
 
   // Stats accumulators
   float peak_in = 0.0f, peak_out = 0.0f;
@@ -220,12 +211,11 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples,
     float sample = samples[i];
 
     // Prefilter
-    float audio_prefilt =
-        (1.0f - audio_alpha) * sample + audio_alpha * audio_lpf_state;
+    float audio_prefilt = (1.0f - audio_alpha) * sample + audio_alpha * audio_lpf_state;
     audio_lpf_state = audio_prefilt;
 
     // Peak limit
-    if (audio_prefilt > CESSB_AUDIO_PEAK_LIMIT)  audio_prefilt = CESSB_AUDIO_PEAK_LIMIT;
+    if (audio_prefilt > CESSB_AUDIO_PEAK_LIMIT) audio_prefilt = CESSB_AUDIO_PEAK_LIMIT;
     if (audio_prefilt < -CESSB_AUDIO_PEAK_LIMIT) audio_prefilt = -CESSB_AUDIO_PEAK_LIMIT;
 
     sample = audio_prefilt;  // replace input with Stage 1 output
@@ -236,7 +226,7 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples,
     sum_sq_in += sample * sample;
 
     // Analytic signal
-    float q  = hilbert_transform(state, sample);
+    float q = hilbert_transform(state, sample);
     float ii = delay_sample(state, sample);
 
     cur_i[i] = ii;
@@ -248,7 +238,7 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples,
   for (int i = 0; i < num_samples; i++) {
     float mag = hypotf(cur_i[i], cur_q[i]);
     if (mag > CESSB_RF_CLIP_LEVEL) {
-      float scale = CESSB_RF_CLIP_LEVEL / (mag + 1e-9f); // avoid div/0
+      float scale = CESSB_RF_CLIP_LEVEL / (mag + 1e-9f);  // avoid div/0
       cur_i[i] *= scale;
       cur_q[i] *= scale;
       mag = CESSB_RF_CLIP_LEVEL;
@@ -256,24 +246,22 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples,
     cur_env[i] = mag;
   }
 
-  // Stage 3: sample-accurate look-ahead limiter + hard cap + post-LPF + guard
-  // Uses a sliding window of length CESSB_LA_SAMPLES; outputs are delayed by (LA-1) samples.
-  int outputs_emitted = 0;
+  // Stage 3: streaming look-ahead limiter with fixed LA-sample delay
   for (int n = 0; n < num_samples; n++) {
-    // Push current sample into ring
-    int pos = (la_buf_head + la_buf_len) % CESSB_RING_MAX;
-    la_buf_i[pos] = cur_i[n];
-    la_buf_q[pos] = cur_q[n];
-    la_buf_env[pos] = cur_env[n];
-    if (la_buf_len < CESSB_RING_MAX) la_buf_len++;
+    // Push current sample into look-ahead window
+    int tail = (la_head + la_len) % CESSB_LA_SAMPLES;
+    la_ring_i[tail] = cur_i[n];
+    la_ring_q[tail] = cur_q[n];
+    la_ring_env[tail] = cur_env[n];
+    if (la_len < CESSB_LA_SAMPLES) la_len++;
 
-    // Emit once we have at least LA samples buffered
-    if (la_buf_len >= CESSB_LA_SAMPLES) {
-      // Compute max envelope over the last LA samples (O(LA); LA=96)
+    // Emit once the window is full (fixed LA latency)
+    if (la_len == CESSB_LA_SAMPLES) {
+      // Compute envelope max over the window (LA=96 => cheap O(LA))
       float env_max = 0.0f;
       for (int k = 0; k < CESSB_LA_SAMPLES; k++) {
-        int idx = (pos - k + CESSB_RING_MAX) % CESSB_RING_MAX;
-        float ev = la_buf_env[idx];
+        int idx = (la_head + k) % CESSB_LA_SAMPLES;
+        float ev = la_ring_env[idx];
         if (ev > env_max) env_max = ev;
       }
 
@@ -289,10 +277,9 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples,
         la_gain = (1.0f - rel_a) * g_target + rel_a * la_gain;
       }
 
-      // Oldest sample in the window is at head; that is the one we output now
-      int out_idx = la_buf_head;
-      float i_limited = la_buf_i[out_idx] * la_gain;
-      float q_limited = la_buf_q[out_idx] * la_gain;
+      // Oldest sample in the window is the one we emit now
+      float i_limited = la_ring_i[la_head] * la_gain;
+      float q_limited = la_ring_q[la_head] * la_gain;
 
       // Hard envelope cap
       float env2 = sqrtf(i_limited * i_limited + q_limited * q_limited);
@@ -303,23 +290,18 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples,
       }
 
       float output_unfiltered = i_limited;  // transmit real part
-      state->post_lpf_state = (1.0f - post_alpha) * output_unfiltered +
-                              post_alpha * state->post_lpf_state;
+      state->post_lpf_state =
+          (1.0f - post_alpha) * output_unfiltered + post_alpha * state->post_lpf_state;
       float output = soft_clip(state->post_lpf_state, CESSB_OUTPUT_GUARD);
 
-      // Queue the output; it will be drained to the caller after processing.
-      int fifo_pos = (out_fifo_head + out_fifo_len) % CESSB_RING_MAX;
-      out_fifo[fifo_pos] = output;
-      if (out_fifo_len < CESSB_RING_MAX) {
-        out_fifo_len++;
-      } else {
-        // Should not occur with current sizing, but guard against overflow.
-        out_fifo_head = (out_fifo_head + 1) % CESSB_RING_MAX;
+      // Emit (one-out per input after fill)
+      if (out_pos < num_samples) {
+        samples[out_pos++] = output;
       }
 
       // Pop head
-      la_buf_head = (la_buf_head + 1) % CESSB_RING_MAX;
-      la_buf_len--;
+      la_head = (la_head + 1) % CESSB_LA_SAMPLES;
+      la_len--;
 
       // Stats
       float abs_out = fabsf(output);
@@ -329,22 +311,15 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples,
     }
   }
 
-  // Write outputs (leading (LA-1) samples of the first call will be zero, not a whole block)
-   int to_emit = (out_fifo_len < num_samples) ? out_fifo_len : num_samples;
-  for (int i = 0; i < to_emit; i++) {
-    samples[i] = out_fifo[out_fifo_head];
-    out_fifo_head = (out_fifo_head + 1) % CESSB_RING_MAX;
-  }
-  out_fifo_len -= to_emit;
-  // If pipeline not yet full, pad leading part of the block with zeros
-  for (int i = to_emit; i < num_samples; i++) {
+  // If pipeline not yet full, pad the remainder of this block with zeros
+  for (int i = out_pos; i < num_samples; i++) {
     samples[i] = 0.0f;
   }
 
   // update statistics
-  state->peak_input  = 0.9f * state->peak_input  + 0.1f * peak_in;
+  state->peak_input = 0.9f * state->peak_input + 0.1f * peak_in;
   state->peak_output = 0.9f * state->peak_output + 0.1f * peak_out;
-  state->average_power_in  =
+  state->average_power_in =
       0.95f * state->average_power_in + 0.05f * (sum_sq_in / num_samples);
   if (outputs_emitted > 0) {
     state->average_power_out =
@@ -354,8 +329,8 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples,
 
 // called from tx_process in sbitx.c
 // gets block of integer samples, converts to float, processes, and converts back to int
-void cessb_process_int32(cessb_state_t *state, int32_t *samples,
-                         int num_samples, float sample_rate) {
+void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples,
+                         float sample_rate) {
   // Debug session control (per transmission)
   static int debug_active = 0;       // true while collecting/printing this transmission
   static int debug_blocks_left = 0;  // countdown of blocks to process for debug
@@ -372,8 +347,8 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples,
     struct timespec now;
     if (clock_gettime(CLOCK_MONOTONIC, &now) == 0) {
       if (debug_have_ts) {
-        double dt = (now.tv_sec - debug_last_ts.tv_sec)
-                    + (now.tv_nsec - debug_last_ts.tv_nsec) / 1e9;
+        double dt = (now.tv_sec - debug_last_ts.tv_sec) +
+                    (now.tv_nsec - debug_last_ts.tv_nsec) / 1e9;
         if (dt > DEBUG_IDLE_GAP_S) {
           new_transmission = 1;
         }
@@ -388,9 +363,9 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples,
 
   // Start debug collection on each detected transmission start
   if (new_transmission) {
-    cessb_reset_stats(state);   // clear accumulated data before starting
+    cessb_reset_stats(state);  // clear accumulated data before starting
     debug_active = 1;
-    debug_blocks_left = 500;    // process 500 blocks, then stop
+    debug_blocks_left = 500;  // process 500 blocks, then stop
     cessb_debug_accum_s = 0.0f;
   }
 
@@ -427,14 +402,11 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples,
       cessb_get_stats(state, &peak_red_db, &avg_gain_db);
 
       // Note: peak_red_db will be negative if output peak < input peak.
-      printf("CESSB STATS: peak_in=%.3f peak_out=%.3f peak_reduction=%.2f dB "
-             "avg_power_in=%.6f avg_power_out=%.6f avg_power_gain=%.2f dB\n",
-             state->peak_input,
-             state->peak_output,
-             peak_red_db,
-             state->average_power_in,
-             state->average_power_out,
-             avg_gain_db);
+      printf(
+          "CESSB STATS: peak_in=%.3f peak_out=%.3f peak_reduction=%.2f dB "
+          "avg_power_in=%.6f avg_power_out=%.6f avg_power_gain=%.2f dB\n",
+          state->peak_input, state->peak_output, peak_red_db, state->average_power_in,
+          state->average_power_out, avg_gain_db);
     }
 
     // Stop collecting after 500 blocks in this transmission
@@ -449,16 +421,14 @@ void cessb_get_stats(cessb_state_t *state, float *peak_reduction_db,
                      float *avg_power_gain_db) {
   if (peak_reduction_db) {
     if (state->peak_input > 0.0001f && state->peak_output > 0.0001f) {
-      *peak_reduction_db =
-          20.0f * log10f(state->peak_output / state->peak_input);
+      *peak_reduction_db = 20.0f * log10f(state->peak_output / state->peak_input);
     } else {
       *peak_reduction_db = 0.0f;
     }
   }
 
   if (avg_power_gain_db) {
-    if (state->average_power_in > 0.000001f &&
-        state->average_power_out > 0.000001f) {
+    if (state->average_power_in > 0.000001f && state->average_power_out > 0.000001f) {
       *avg_power_gain_db =
           10.0f * log10f(state->average_power_out / state->average_power_in);
     } else {
@@ -473,6 +443,3 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->average_power_in = 0.0f;
   state->average_power_out = 0.0f;
 }
-
-
-
