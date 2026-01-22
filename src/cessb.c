@@ -40,6 +40,7 @@
 #define CESSB_RF_CLIP_LEVEL      1.05f    // Stage 2 complex-envelope clip
 #define CESSB_LA_SAMPLES 96       // look-ahead window length in samples (≈1ms @ 96kHz)
 #define CESSB_BLOCK_MAX 1024      // expected maximum block size
+#define CESSB_RING_MAX (CESSB_LA_SAMPLES + CESSB_BLOCK_MAX)
 #define CESSB_GAIN_ATTACK_MS 0.05f  // gain smoothing time constants (ms)
 #define CESSB_GAIN_RELEASE_MS 15.0f
 #define CESSB_OUTPUT_GUARD 0.99f  // final soft-clip guard threshold
@@ -54,29 +55,22 @@ static int debug_have_ts = 0;
 int cessb_enabled = 0;
 cessb_state_t cessb_processor;
 
-// one-block look-ahead pipeline state (cross-block continuity)
-static int la_block_valid = 0;  // becomes 1 after first block is captured
-
-// stored analytic signal for the block we will output this call (aka PREVIOUS block)
-static float la_out_i[CESSB_BLOCK_MAX];
-static float la_out_q[CESSB_BLOCK_MAX];
-static float la_out_env[CESSB_BLOCK_MAX];
-static int   la_out_n = 0;
-
-// gain schedule for previous block (computed each call)
-static float la_prev_g[CESSB_BLOCK_MAX];
-
-// smoothed gain state (continuous across blocks)
+// Sliding-window look-ahead ring buffers (cross-block continuity)
+static float la_buf_i[CESSB_RING_MAX];
+static float la_buf_q[CESSB_RING_MAX];
+static float la_buf_env[CESSB_RING_MAX];
+static int   la_buf_head = 0;   // index of oldest sample
+static int   la_buf_len  = 0;   // number of valid samples in buffer
+// Smoothed gain state (continuous across blocks)
 static float la_gain = 1.0f;
 
 static inline void cessb_la_block_reset(void) {
-  la_block_valid = 0;
-  la_out_n = 0;
+  la_buf_head = 0;
+  la_buf_len = 0;
   la_gain = 1.0f;
-  memset(la_out_i, 0, sizeof(la_out_i));
-  memset(la_out_q, 0, sizeof(la_out_q));
-  memset(la_out_env, 0, sizeof(la_out_env));
-  memset(la_prev_g, 0, sizeof(la_prev_g));
+  memset(la_buf_i, 0, sizeof(la_buf_i));
+  memset(la_buf_q, 0, sizeof(la_buf_q));
+  memset(la_buf_env, 0, sizeof(la_buf_env));
 }
 
 // Hilbert transform coefficients (127-tap equiripple FIR, Type IV)
@@ -208,6 +202,8 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples,
   float cur_i[CESSB_BLOCK_MAX];
   float cur_q[CESSB_BLOCK_MAX];
   float cur_env[CESSB_BLOCK_MAX];
+  float out_block[CESSB_BLOCK_MAX];
+  memset(out_block, 0, sizeof(float) * (size_t)num_samples);
 
   // Stats accumulators
   float peak_in = 0.0f, peak_out = 0.0f;
@@ -255,111 +251,89 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples,
     cur_env[i] = mag;
   }
 
-  // Stage 3: look-ahead limiter + hard cap + post-LPF + output guard
-  if (!la_block_valid) {
-    memcpy(la_out_i, cur_i, sizeof(float) * (size_t)num_samples);
-    memcpy(la_out_q, cur_q, sizeof(float) * (size_t)num_samples);
-    memcpy(la_out_env, cur_env, sizeof(float) * (size_t)num_samples);
-    la_out_n = num_samples;
+  // Stage 3: sample-accurate look-ahead limiter + hard cap + post-LPF + guard
+  // Uses a sliding window of length CESSB_LA_SAMPLES; outputs are delayed by (LA-1) samples.
+  int outputs_emitted = 0;
+  for (int n = 0; n < num_samples; n++) {
+    // Push current sample into ring
+    int pos = (la_buf_head + la_buf_len) % CESSB_RING_MAX;
+    la_buf_i[pos] = cur_i[n];
+    la_buf_q[pos] = cur_q[n];
+    la_buf_env[pos] = cur_env[n];
+    if (la_buf_len < CESSB_RING_MAX) la_buf_len++;
 
-    for (int i = 0; i < num_samples; i++) samples[i] = 0.0f;
-    la_block_valid = 1;
-
-    state->peak_input  = 0.9f * state->peak_input  + 0.1f * peak_in;
-    state->peak_output = 0.9f * state->peak_output + 0.1f * 0.0f;
-    state->average_power_in  =
-        0.95f * state->average_power_in + 0.05f * (sum_sq_in / num_samples);
-    state->average_power_out =
-        0.95f * state->average_power_out + 0.05f * 0.0f;
-    return;
-  }
-
-  const int prev_n = la_out_n;
-  const int LA = CESSB_LA_SAMPLES;
-  const int cur_head_n = (num_samples < (LA - 1)) ? num_samples : (LA - 1);
-
-  // Gain schedule with look-ahead
-  for (int i = 0; i < prev_n; i++) {
-    float env_max = 0.0f;
-
-    for (int k = 0; k < LA; k++) {
-      int idx = i + k;
-      float env = 0.0f;
-
-      if (idx < prev_n) {
-        env = la_out_env[idx];
-      } else {
-        int cur_idx = idx - prev_n;
-        if (cur_idx < cur_head_n) {
-          env = cur_env[cur_idx];
-        } else {
-          break;  // no more look-ahead available
-        }
+    // Emit once we have at least LA samples buffered
+    if (la_buf_len >= CESSB_LA_SAMPLES) {
+      // Compute max envelope over the last LA samples (O(LA); LA=96)
+      float env_max = 0.0f;
+      for (int k = 0; k < CESSB_LA_SAMPLES; k++) {
+        int idx = (pos - k + CESSB_RING_MAX) % CESSB_RING_MAX;
+        float ev = la_buf_env[idx];
+        if (ev > env_max) env_max = ev;
       }
-      if (env > env_max) env_max = env;
-    }
 
-    float g = 1.0f;
-    if (env_max > state->envelope_limit && env_max > 1e-9f) {
-      g = state->envelope_limit / env_max;
+      float g_target = 1.0f;
+      if (env_max > state->envelope_limit && env_max > 1e-9f) {
+        g_target = state->envelope_limit / env_max;
+      }
+
+      // Smooth gain per-sample
+      if (g_target < la_gain) {
+        la_gain = (1.0f - att_a) * g_target + att_a * la_gain;
+      } else {
+        la_gain = (1.0f - rel_a) * g_target + rel_a * la_gain;
+      }
+
+      // Oldest sample in the window is at head; that is the one we output now
+      int out_idx = la_buf_head;
+      float i_limited = la_buf_i[out_idx] * la_gain;
+      float q_limited = la_buf_q[out_idx] * la_gain;
+
+      // Hard envelope cap
+      float env2 = sqrtf(i_limited * i_limited + q_limited * q_limited);
+      if (env2 > state->envelope_limit && env2 > 0.0001f) {
+        float scale = state->envelope_limit / env2;
+        i_limited *= scale;
+        q_limited *= scale;
+      }
+
+      float output_unfiltered = i_limited;  // transmit real part
+      state->post_lpf_state = (1.0f - post_alpha) * output_unfiltered +
+                              post_alpha * state->post_lpf_state;
+      float output = soft_clip(state->post_lpf_state, CESSB_OUTPUT_GUARD);
+
+      // Output slot is delayed by (LA-1) samples relative to current n
+      int out_slot = n - (CESSB_LA_SAMPLES - 1);
+      if (out_slot >= 0 && out_slot < num_samples) {
+        out_block[out_slot] = output;
+      }
+
+      // Pop head
+      la_buf_head = (la_buf_head + 1) % CESSB_RING_MAX;
+      la_buf_len--;
+
+      // Stats
+      float abs_out = fabsf(output);
+      if (abs_out > peak_out) peak_out = abs_out;
+      sum_sq_out += output * output;
+      outputs_emitted++;
     }
-    la_prev_g[i] = g;
   }
 
-  // Output stage on previous block
-  const int n_out = (prev_n < num_samples) ? prev_n : num_samples;
-  for (int i = 0; i < n_out; i++) {
-    float g_target = la_prev_g[i];
-
-    // Smooth gain
-    if (g_target < la_gain) {
-      la_gain = (1.0f - att_a) * g_target + att_a * la_gain;
-    } else {
-      la_gain = (1.0f - rel_a) * g_target + rel_a * la_gain;
-    }
-
-    float i_limited = la_out_i[i] * la_gain;
-    float q_limited = la_out_q[i] * la_gain;
-
-    // Hard envelope cap
-    float env2 = sqrtf(i_limited * i_limited + q_limited * q_limited);
-    if (env2 > state->envelope_limit && env2 > 0.0001f) {
-      float scale = state->envelope_limit / env2;
-      i_limited *= scale;
-      q_limited *= scale;
-    }
-
-    float output_unfiltered = i_limited;  // transmit real part
-    state->post_lpf_state = (1.0f - post_alpha) * output_unfiltered +
-                            post_alpha * state->post_lpf_state;
-    float output = state->post_lpf_state;
-
-    output = soft_clip(output, CESSB_OUTPUT_GUARD);
-
-    samples[i] = output;
-
-    float abs_out = fabsf(output);
-    if (abs_out > peak_out) peak_out = abs_out;
-    sum_sq_out += output * output;
+  // Write outputs (leading (LA-1) samples of the first call will be zero, not a whole block)
+  for (int i = 0; i < num_samples; i++) {
+    samples[i] = out_block[i];
   }
-
-  for (int i = n_out; i < num_samples; i++) {
-    samples[i] = 0.0f;
-  }
-
-  // shift pipeline: CURRENT becomes PREVIOUS
-  memcpy(la_out_i, cur_i, sizeof(float) * (size_t)num_samples);
-  memcpy(la_out_q, cur_q, sizeof(float) * (size_t)num_samples);
-  memcpy(la_out_env, cur_env, sizeof(float) * (size_t)num_samples);
-  la_out_n = num_samples;
 
   // update statistics
   state->peak_input  = 0.9f * state->peak_input  + 0.1f * peak_in;
   state->peak_output = 0.9f * state->peak_output + 0.1f * peak_out;
   state->average_power_in  =
       0.95f * state->average_power_in + 0.05f * (sum_sq_in / num_samples);
-  state->average_power_out =
-      0.95f * state->average_power_out + 0.05f * (sum_sq_out / num_samples);
+  if (outputs_emitted > 0) {
+    state->average_power_out =
+        0.95f * state->average_power_out + 0.05f * (sum_sq_out / outputs_emitted);
+  }
 }
 
 // called from tx_process in sbitx.c
@@ -483,3 +457,4 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->average_power_in = 0.0f;
   state->average_power_out = 0.0f;
 }
+
