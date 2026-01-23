@@ -210,6 +210,11 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples,
   static float audio_lpf_state = 0.0f;
   for (int i = 0; i < num_samples; i++) {
     float sample = samples[i];
+    
+    // Track input stats before anything is done
+    float abs_in = fabsf(sample);
+    if (abs_in > peak_in) peak_in = abs_in;
+    sum_sq_in += sample * sample;
 
     // Prefilter
     float audio_prefilt = (1.0f - audio_alpha) * sample + audio_alpha * audio_lpf_state;
@@ -220,11 +225,6 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples,
     if (audio_prefilt < -CESSB_AUDIO_PEAK_LIMIT) audio_prefilt = -CESSB_AUDIO_PEAK_LIMIT;
 
     sample = audio_prefilt;  // replace input with Stage 1 output
-
-    // Track input stats
-    float abs_in = fabsf(sample);
-    if (abs_in > peak_in) peak_in = abs_in;
-    sum_sq_in += sample * sample;
 
     // Analytic signal
     float q = hilbert_transform(state, sample);
@@ -444,4 +444,5 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->average_power_in = 0.0f;
   state->average_power_out = 0.0f;
 }
+
 
