@@ -338,6 +338,7 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
   int hilbert_delay_len = (HILBERT_TAPS / 2) + 1;
 
   for (int i = 0; i < num_samples; i++) {
+    // normalize sample to +/1 1.0
     float sample = samples[i] * AUDIO_SCALE_IN;
 
     float abs_in = fabsf(sample);
@@ -426,6 +427,7 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
   while (remaining > 0) {
     int block_size = (remaining > 64) ? 64 : remaining;
 
+    // convert int32_t audio sample to float
     for (int j = 0; j < block_size; j++) {
       temp_buffer[j] = (float)samples[offset + j] * scale_in;
     }
@@ -490,3 +492,4 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;
 }
+
