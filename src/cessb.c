@@ -3,38 +3,37 @@
 // Reference: "Controlled Envelope Single Sideband" by David Hershberger, W9GR
 //            QEX November/December 2014
 //
-// Concept:
-// CESSB increases average SSB transmit power by 2-3 dB without increasing peak
+// Concept: CESSB increases average SSB transmit power by ~2–3 dB without increasing peak
 // envelope power (PEP). This is achieved by controlling envelope overshoot that
 // normally occurs when clipped audio is filtered.
 //
-// The key innovation is the "overshoot control filter" - a specially designed
-// lowpass filter that prevents clipped signals from regenerating envelope peaks
+// The key innovation is the "overshoot control filter" – a specially designed
+// low-pass filter that prevents clipped signals from regenerating envelope peaks
 // when passed through the SSB transmit bandwidth filter.
 //
 // Processing chain:
-// - Input audio samples integers, converted to float (±0.04)
+// - Input audio samples (integers), converted to float (±0.04)
 // - Normalize to ±1.0
-// - Hilbert Transform (127taps)
-// - Hard Clip (envelope based)to CESSB_CLIP_LEVEL
-// - Overshoot Control Blackman-Harris windowed LPF @ 3kHz prevents overshoot regeneration
-// - Hilbert Transform to re-measure envelope after filtering
-// - Look-Ahead final envelope limiting with configurable look-ahead (up to 1024 samples)
-//   Smooth attack/release gain control
-// - Post-Limiter LPF│  6th-order Butterworth @ 3kHz
+// - Hilbert transform (127 taps)
+// - Hard clip (envelope-based) to CESSB_CLIP_LEVEL
+// - Overshoot-control Blackman–Harris-windowed LPF @ 3 kHz prevents overshoot regeneration
+// - Hilbert transform to re-measure envelope after filtering
+// - Look-ahead final envelope limiting with configurable look-ahead (up to 1024 samples)
+//   and smooth attack/release gain control
+// - Post-limiter LPF: 6th-order Butterworth @ 3 kHz
 //   Removes residual out-of-band content
-// - Scale to ±0.04  and convert back to integer before 
-//    returning processed data to tx_process pipeline
+// - Scale to ±0.04 and convert back to integer before
+//   returning processed data to tx_process pipeline
 //
-// Key configuration 'knobs' (see cessb.h)
+// Key configuration parameters (see cessb.h):
 //
 //   CESSB_CLIP_LEVEL              Initial clip threshold (default 0.85)
 //   CESSB_ENVELOPE_LIMIT          Final limiter ceiling (default 1.0)
-//   LOOKAHEAD_DEFAULT_SAMPLES     default ~2ms at 96kHz
+//   LOOKAHEAD_DEFAULT_SAMPLES     Default look-ahead (~2 ms at 96 kHz)
 //   LOOKAHEAD_DEFAULT_ATTACK_MS   Limiter attack (default 0.5 ms)
 //   LOOKAHEAD_DEFAULT_RELEASE_MS  Limiter release (default 50 ms)
 //
-// added by Mike KB2ML and Bob KD8CGH
+// Added by Mike KB2ML and Bob KD8CGH
 
 #include <stdlib.h>
 #include <string.h>
@@ -318,6 +317,24 @@ int cessb_get_lookahead_samples(cessb_state_t *state) {
     return state->lookahead.lookahead_samples;
 }
 
+void cessb_debug_print_stats(cessb_state_t *state)
+{
+    float peak_reduction_db = 0.0f;
+    float avg_power_gain_db = 0.0f;
+
+    cessb_get_stats(state, &peak_reduction_db, &avg_power_gain_db);
+
+    printf("CESSB stats:\n");
+    printf("  samples processed      : %ld\n", (long)state->sample_count);
+    printf("  peak in (pre)          : %8.4f\n", state->peak_input);
+    printf("  peak after clip        : %8.4f\n", state->peak_after_clip);
+    printf("  peak after overshoot   : %8.4f\n", state->peak_after_overshoot);
+    printf("  peak out (post)        : %8.4f\n", state->peak_output);
+    printf("  min limiter gain       : %8.4f\n", state->min_limiter_gain);
+    printf("  peak reduction (dB)    : %8.2f dB\n", peak_reduction_db);
+    printf("  avg power gain (dB)    : %8.2f dB\n", avg_power_gain_db);
+}
+
 // ============================================================================
 // MAIN CESSB PROCESSING
 // ============================================================================
@@ -407,7 +424,7 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
         return;
     }
     
-    const float scale_in = AUDIO_PEAK_LEVEL / 2147483648.0f;
+    const float scale_in  = AUDIO_PEAK_LEVEL / 2147483648.0f;
     const float scale_out = 2147483647.0f / AUDIO_PEAK_LEVEL;
     
     float temp_buffer[64];
@@ -425,13 +442,21 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
         
         for (int j = 0; j < block_size; j++) {
             float out = temp_buffer[j] * scale_out;
-            if (out > 2147483647.0f) out = 2147483647.0f;
+            if (out >  2147483647.0f) out =  2147483647.0f;
             if (out < -2147483648.0f) out = -2147483648.0f;
             samples[offset + j] = (int32_t)out;
         }
         
-        offset += block_size;
+        offset    += block_size;
         remaining -= block_size;
+    }
+
+    // Simple periodic stats print
+    static unsigned long last_sample_count = 0;
+
+    if (state->sample_count - last_sample_count >= 1000000UL) {
+        last_sample_count = state->sample_count;
+        cessb_debug_print_stats(state);
     }
 }
 
@@ -471,4 +496,5 @@ void cessb_reset_stats(cessb_state_t *state) {
     state->average_power_out = 0.0f;
     state->min_limiter_gain = 1.0f;
     state->sample_count = 0;
+
 }
