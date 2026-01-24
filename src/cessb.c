@@ -37,6 +37,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>    // for debug print statements only
 #include <math.h>
 #include "cessb.h"
 
@@ -498,3 +499,4 @@ void cessb_reset_stats(cessb_state_t *state) {
     state->sample_count = 0;
 
 }
+
