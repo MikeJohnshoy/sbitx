@@ -7,10 +7,6 @@
 // envelope power (PEP). This is achieved by controlling envelope overshoot that
 // normally occurs when clipped audio is filtered.
 //
-// The key innovation is the "overshoot control filter" – a specially designed
-// low-pass filter that prevents clipped signals from regenerating envelope peaks
-// when passed through the SSB transmit bandwidth filter.
-//
 // Processing chain:
 // - Input audio samples (integers), converted to float (±0.04)
 // - Normalize to ±1.0
@@ -35,23 +31,23 @@
 //
 // Added by Mike KB2ML and Bob KD8CGH
 
+#include <math.h>
+#include <stdio.h>  // for debug print statements only
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>    // for debug print statements only
-#include <math.h>
+
 #include "cessb.h"
 
 // ============================================================================
 // SIGNAL SCALING
 // ============================================================================
 #define AUDIO_PEAK_LEVEL 0.04f
-#define AUDIO_SCALE_IN   (1.0f / AUDIO_PEAK_LEVEL)
-#define AUDIO_SCALE_OUT  AUDIO_PEAK_LEVEL
+#define AUDIO_SCALE_IN (1.0f / AUDIO_PEAK_LEVEL)
+#define AUDIO_SCALE_OUT AUDIO_PEAK_LEVEL
 
 // ============================================================================
 // PRECOMPUTED FILTER COEFFICIENTS
 // Generated for: 96000 Hz sample rate, 3000 Hz audio cutoff
-// To regenerate: python generate_cessb_coeffs.py
 // ============================================================================
 
 // Hilbert transform filter (127 taps, Blackman window)
@@ -119,41 +115,42 @@ cessb_state_t cessb_processor;
 // ============================================================================
 
 static float time_constant_to_coeff(float time_ms, float sample_rate) {
-    if (time_ms <= 0.0f) return 1.0f;
-    float time_samples = (time_ms / 1000.0f) * sample_rate;
-    return 1.0f - expf(-1.0f / time_samples);
+  if (time_ms <= 0.0f) return 1.0f;
+  float time_samples = (time_ms / 1000.0f) * sample_rate;
+  return 1.0f - expf(-1.0f / time_samples);
 }
 
 // ============================================================================
 // FIR FILTER PROCESSING
 // ============================================================================
 
-static float apply_fir_filter(const float *coeffs, float *delay, int *index, int num_taps, float input) {
-    delay[*index] = input;
-    
-    float output = 0.0f;
-    int idx = *index;
-    
-    for (int i = 0; i < num_taps; i++) {
-        output += coeffs[i] * delay[idx];
-        idx--;
-        if (idx < 0) idx = num_taps - 1;
-    }
-    
-    (*index)++;
-    if (*index >= num_taps) *index = 0;
-    
-    return output;
+static float apply_fir_filter(const float *coeffs, float *delay, int *index, int num_taps,
+                              float input) {
+  delay[*index] = input;
+
+  float output = 0.0f;
+  int idx = *index;
+
+  for (int i = 0; i < num_taps; i++) {
+    output += coeffs[i] * delay[idx];
+    idx--;
+    if (idx < 0) idx = num_taps - 1;
+  }
+
+  (*index)++;
+  if (*index >= num_taps) *index = 0;
+
+  return output;
 }
 
 static float get_delayed_sample(float *delay, int *index, int delay_length, float input) {
-    float output = delay[*index];
-    delay[*index] = input;
-    
-    (*index)++;
-    if (*index >= delay_length) *index = 0;
-    
-    return output;
+  float output = delay[*index];
+  delay[*index] = input;
+
+  (*index)++;
+  if (*index >= delay_length) *index = 0;
+
+  return output;
 }
 
 // ============================================================================
@@ -161,27 +158,24 @@ static float get_delayed_sample(float *delay, int *index, int delay_length, floa
 // ============================================================================
 
 static float apply_biquad(const float *coeffs, biquad_state_t *state, float input) {
-    float output = coeffs[0] * input 
-                 + coeffs[1] * state->x1 
-                 + coeffs[2] * state->x2
-                 - coeffs[3] * state->y1 
-                 - coeffs[4] * state->y2;
-    
-    state->x2 = state->x1;
-    state->x1 = input;
-    state->y2 = state->y1;
-    state->y1 = output;
-    
-    return output;
+  float output = coeffs[0] * input + coeffs[1] * state->x1 + coeffs[2] * state->x2 -
+                 coeffs[3] * state->y1 - coeffs[4] * state->y2;
+
+  state->x2 = state->x1;
+  state->x1 = input;
+  state->y2 = state->y1;
+  state->y1 = output;
+
+  return output;
 }
 
-static float apply_biquad_cascade(const float coeffs[][5], biquad_state_t *states, 
-                                   int num_stages, float input) {
-    float output = input;
-    for (int i = 0; i < num_stages; i++) {
-        output = apply_biquad(coeffs[i], &states[i], output);
-    }
-    return output;
+static float apply_biquad_cascade(const float coeffs[][5], biquad_state_t *states,
+                                  int num_stages, float input) {
+  float output = input;
+  for (int i = 0; i < num_stages; i++) {
+    output = apply_biquad(coeffs[i], &states[i], output);
+  }
+  return output;
 }
 
 // ============================================================================
@@ -189,62 +183,62 @@ static float apply_biquad_cascade(const float coeffs[][5], biquad_state_t *state
 // ============================================================================
 
 static void lookahead_limiter_init(lookahead_limiter_t *lim, float sample_rate) {
-    memset(lim->delay, 0, sizeof(lim->delay));
-    memset(lim->envelope, 0, sizeof(lim->envelope));
-    lim->write_index = 0;
-    lim->lookahead_samples = LOOKAHEAD_DEFAULT_SAMPLES;
-    lim->current_gain = 1.0f;
-    lim->peak_hold = 0.0f;
-    
-    lim->attack_coeff = time_constant_to_coeff(LOOKAHEAD_DEFAULT_ATTACK_MS, sample_rate);
-    lim->release_coeff = time_constant_to_coeff(LOOKAHEAD_DEFAULT_RELEASE_MS, sample_rate);
+  memset(lim->delay, 0, sizeof(lim->delay));
+  memset(lim->envelope, 0, sizeof(lim->envelope));
+  lim->write_index = 0;
+  lim->lookahead_samples = LOOKAHEAD_DEFAULT_SAMPLES;
+  lim->current_gain = 1.0f;
+  lim->peak_hold = 0.0f;
+
+  lim->attack_coeff = time_constant_to_coeff(LOOKAHEAD_DEFAULT_ATTACK_MS, sample_rate);
+  lim->release_coeff = time_constant_to_coeff(LOOKAHEAD_DEFAULT_RELEASE_MS, sample_rate);
 }
 
 static float find_peak_in_window(lookahead_limiter_t *lim) {
-    float peak = 0.0f;
-    int read_index = lim->write_index;
-    
-    for (int i = 0; i < lim->lookahead_samples; i++) {
-        if (lim->envelope[read_index] > peak) {
-            peak = lim->envelope[read_index];
-        }
-        read_index++;
-        if (read_index >= LOOKAHEAD_MAX_SAMPLES) read_index = 0;
+  float peak = 0.0f;
+  int read_index = lim->write_index;
+
+  for (int i = 0; i < lim->lookahead_samples; i++) {
+    if (lim->envelope[read_index] > peak) {
+      peak = lim->envelope[read_index];
     }
-    
-    return peak;
+    read_index++;
+    if (read_index >= LOOKAHEAD_MAX_SAMPLES) read_index = 0;
+  }
+
+  return peak;
 }
 
-static float lookahead_limiter_process(lookahead_limiter_t *lim, float input, 
-                                        float envelope, float limit) {
-    lim->delay[lim->write_index] = input;
-    lim->envelope[lim->write_index] = envelope;
-    
-    int read_index = lim->write_index - lim->lookahead_samples;
-    if (read_index < 0) read_index += LOOKAHEAD_MAX_SAMPLES;
-    
-    float peak_envelope = find_peak_in_window(lim);
-    
-    float target_gain = 1.0f;
-    if (peak_envelope > limit && peak_envelope > 1e-10f) {
-        target_gain = limit / peak_envelope;
-    }
-    
-    if (target_gain < lim->current_gain) {
-        lim->current_gain += lim->attack_coeff * (target_gain - lim->current_gain);
-    } else {
-        lim->current_gain += lim->release_coeff * (target_gain - lim->current_gain);
-    }
-    
-    if (lim->current_gain < 0.0f) lim->current_gain = 0.0f;
-    if (lim->current_gain > 1.0f) lim->current_gain = 1.0f;
-    
-    float output = lim->delay[read_index] * lim->current_gain;
-    
-    lim->write_index++;
-    if (lim->write_index >= LOOKAHEAD_MAX_SAMPLES) lim->write_index = 0;
-    
-    return output;
+static float lookahead_limiter_process(lookahead_limiter_t *lim, float input,
+                                       float envelope, float limit) {
+  lim->delay[lim->write_index] = input;
+  lim->envelope[lim->write_index] = envelope;
+
+  int read_index = lim->write_index - lim->lookahead_samples;
+  if (read_index < 0) read_index += LOOKAHEAD_MAX_SAMPLES;
+
+  float peak_envelope = find_peak_in_window(lim);
+
+  float target_gain = 1.0f;
+  if (peak_envelope > limit && peak_envelope > 1e-10f) {
+    target_gain = limit / peak_envelope;
+  }
+
+  if (target_gain < lim->current_gain) {
+    lim->current_gain += lim->attack_coeff * (target_gain - lim->current_gain);
+  } else {
+    lim->current_gain += lim->release_coeff * (target_gain - lim->current_gain);
+  }
+
+  if (lim->current_gain < 0.0f) lim->current_gain = 0.0f;
+  if (lim->current_gain > 1.0f) lim->current_gain = 1.0f;
+
+  float output = lim->delay[read_index] * lim->current_gain;
+
+  lim->write_index++;
+  if (lim->write_index >= LOOKAHEAD_MAX_SAMPLES) lim->write_index = 0;
+
+  return output;
 }
 
 // ============================================================================
@@ -252,88 +246,84 @@ static float lookahead_limiter_process(lookahead_limiter_t *lim, float input,
 // ============================================================================
 
 void cessb_init(cessb_state_t *state, float sample_rate) {
-    memset(state, 0, sizeof(cessb_state_t));
-    
-    state->enabled = CESSB_DISABLED;
-    state->clip_level = CESSB_CLIP_LEVEL;
-    state->envelope_limit = CESSB_ENVELOPE_LIMIT;
-    state->sample_rate = sample_rate;
-    
-    state->hilbert_index = 0;
-    state->delay_index = 0;
-    state->overshoot_index = 0;
-    state->hilbert2_index = 0;
-    state->delay2_index = 0;
-    
-    lookahead_limiter_init(&state->lookahead, sample_rate);
-    
-    cessb_reset_stats(state);
+  memset(state, 0, sizeof(cessb_state_t));
+
+  state->enabled = CESSB_DISABLED;
+  state->clip_level = CESSB_CLIP_LEVEL;
+  state->envelope_limit = CESSB_ENVELOPE_LIMIT;
+  state->sample_rate = sample_rate;
+
+  state->hilbert_index = 0;
+  state->delay_index = 0;
+  state->overshoot_index = 0;
+  state->hilbert2_index = 0;
+  state->delay2_index = 0;
+
+  lookahead_limiter_init(&state->lookahead, sample_rate);
+  cessb_reset_stats(state);
 }
 
 void cessb_set_enabled(cessb_state_t *state, int enabled) {
-    state->enabled = enabled;
-    cessb_enabled = enabled;
+  state->enabled = enabled;
+  cessb_enabled = enabled;
 }
 
 void cessb_set_clip_level(cessb_state_t *state, float level) {
-    if (level > 0.0f && level <= 1.0f) {
-        state->clip_level = level;
-    }
+  if (level > 0.0f && level <= 1.0f) {
+    state->clip_level = level;
+  }
 }
 
 void cessb_set_envelope_limit(cessb_state_t *state, float limit) {
-    if (limit > 0.0f && limit <= 1.5f) {
-        state->envelope_limit = limit;
-    }
+  if (limit > 0.0f && limit <= 1.5f) {
+    state->envelope_limit = limit;
+  }
 }
 
-int cessb_is_enabled(cessb_state_t *state) {
-    return state->enabled;
-}
+int cessb_is_enabled(cessb_state_t *state) { return state->enabled; }
 
 // ============================================================================
 // LOOK-AHEAD LIMITER CONFIGURATION
 // ============================================================================
 
 void cessb_set_lookahead_samples(cessb_state_t *state, int samples) {
-    if (samples < 1) samples = 1;
-    if (samples > LOOKAHEAD_MAX_SAMPLES) samples = LOOKAHEAD_MAX_SAMPLES;
-    state->lookahead.lookahead_samples = samples;
+  if (samples < 1) samples = 1;
+  if (samples > LOOKAHEAD_MAX_SAMPLES) samples = LOOKAHEAD_MAX_SAMPLES;
+  state->lookahead.lookahead_samples = samples;
 }
 
 void cessb_set_lookahead_ms(cessb_state_t *state, float milliseconds) {
-    int samples = (int)((milliseconds / 1000.0f) * state->sample_rate + 0.5f);
-    cessb_set_lookahead_samples(state, samples);
+  int samples = (int)((milliseconds / 1000.0f) * state->sample_rate + 0.5f);
+  cessb_set_lookahead_samples(state, samples);
 }
 
 void cessb_set_attack_ms(cessb_state_t *state, float attack_ms) {
-    state->lookahead.attack_coeff = time_constant_to_coeff(attack_ms, state->sample_rate);
+  state->lookahead.attack_coeff = time_constant_to_coeff(attack_ms, state->sample_rate);
 }
 
 void cessb_set_release_ms(cessb_state_t *state, float release_ms) {
-    state->lookahead.release_coeff = time_constant_to_coeff(release_ms, state->sample_rate);
+  state->lookahead.release_coeff = time_constant_to_coeff(release_ms, state->sample_rate);
 }
 
 int cessb_get_lookahead_samples(cessb_state_t *state) {
-    return state->lookahead.lookahead_samples;
+  return state->lookahead.lookahead_samples;
 }
 
-void cessb_debug_print_stats(cessb_state_t *state)
-{
-    float peak_reduction_db = 0.0f;
-    float avg_power_gain_db = 0.0f;
+void cessb_debug_print_stats(cessb_state_t *state) {
+  float peak_reduction_db = 0.0f;
+  float avg_power_gain_db = 0.0f;
 
-    cessb_get_stats(state, &peak_reduction_db, &avg_power_gain_db);
+  cessb_get_stats(state, &peak_reduction_db, &avg_power_gain_db);
 
-    printf("CESSB stats:\n");
-    printf("  samples processed      : %ld\n", (long)state->sample_count);
-    printf("  peak in (pre)          : %8.4f\n", state->peak_input);
-    printf("  peak after clip        : %8.4f\n", state->peak_after_clip);
-    printf("  peak after overshoot   : %8.4f\n", state->peak_after_overshoot);
-    printf("  peak out (post)        : %8.4f\n", state->peak_output);
-    printf("  min limiter gain       : %8.4f\n", state->min_limiter_gain);
-    printf("  peak reduction (dB)    : %8.2f dB\n", peak_reduction_db);
-    printf("  avg power gain (dB)    : %8.2f dB\n", avg_power_gain_db);
+  printf("CESSB stats:\n");
+  printf("  samples processed      : %ld\n", (long)state->sample_count);
+  printf("  peak in (pre)          : %8.4f\n", state->peak_input);
+  printf("  peak after clip        : %8.4f\n", state->peak_after_clip);
+  printf("  peak after overshoot   : %8.4f\n", state->peak_after_overshoot);
+  printf("  peak out (post)        : %8.4f\n", state->peak_output);
+  printf("  min limiter gain       : %8.4f\n", state->min_limiter_gain);
+  printf("  peak reduction (dB)    : %8.2f dB\n", peak_reduction_db);
+  printf("  avg power gain (dB)    : %8.2f dB\n", avg_power_gain_db);
 }
 
 // ============================================================================
@@ -341,162 +331,162 @@ void cessb_debug_print_stats(cessb_state_t *state)
 // ============================================================================
 
 void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
-    if (!state->enabled) {
-        return;
+  if (!state->enabled) {
+    return;
+  }
+
+  int hilbert_delay_len = (HILBERT_TAPS / 2) + 1;
+
+  for (int i = 0; i < num_samples; i++) {
+    float sample = samples[i] * AUDIO_SCALE_IN;
+
+    float abs_in = fabsf(sample);
+    if (abs_in > state->peak_input) {
+      state->peak_input = abs_in;
     }
-    
-    int hilbert_delay_len = (HILBERT_TAPS / 2) + 1;
-    
-    for (int i = 0; i < num_samples; i++) {
-        float sample = samples[i] * AUDIO_SCALE_IN;
-        
-        float abs_in = fabsf(sample);
-        if (abs_in > state->peak_input) {
-            state->peak_input = abs_in;
-        }
-        state->average_power_in += sample * sample;
-        
-        // STAGE 1: Hilbert envelope detection
-        float q = apply_fir_filter(hilbert_coeffs, state->hilbert_delay,
-                                   &state->hilbert_index, HILBERT_TAPS, sample);
-        
-        float i_delayed = get_delayed_sample(state->delay_line, &state->delay_index,
-                                              hilbert_delay_len, sample);
-        
-        float envelope = sqrtf(i_delayed * i_delayed + q * q);
-        
-        // STAGE 2: Hard clip based on envelope
-        float clipped;
-        if (envelope > state->clip_level && envelope > 1e-10f) {
-            float gain = state->clip_level / envelope;
-            clipped = i_delayed * gain;
-        } else {
-            clipped = i_delayed;
-        }
-        
-        float abs_clip = fabsf(clipped);
-        if (abs_clip > state->peak_after_clip) {
-            state->peak_after_clip = abs_clip;
-        }
-        
-        // STAGE 3: Overshoot control filter
-        float filtered = apply_fir_filter(overshoot_coeffs, state->overshoot_delay,
-                                          &state->overshoot_index, OVERSHOOT_FILTER_TAPS, clipped);
-        
-        float abs_filt = fabsf(filtered);
-        if (abs_filt > state->peak_after_overshoot) {
-            state->peak_after_overshoot = abs_filt;
-        }
-        
-        // STAGE 4: Second Hilbert envelope detection
-        float q2 = apply_fir_filter(hilbert_coeffs, state->hilbert2_delay,
-                                    &state->hilbert2_index, HILBERT_TAPS, filtered);
-        
-        float i2_delayed = get_delayed_sample(state->delay2_line, &state->delay2_index,
-                                               hilbert_delay_len, filtered);
-        
-        float envelope2 = sqrtf(i2_delayed * i2_delayed + q2 * q2);
-        
-        // STAGE 5: Look-ahead limiter
-        float limited = lookahead_limiter_process(&state->lookahead, i2_delayed, 
-                                                   envelope2, state->envelope_limit);
-        
-        if (state->lookahead.current_gain < state->min_limiter_gain) {
-            state->min_limiter_gain = state->lookahead.current_gain;
-        }
-        
-        // STAGE 6: Post-limiter lowpass filter
-        float output = apply_biquad_cascade(post_lpf_coeffs, state->post_lpf_state,
-                                            POST_LPF_BIQUAD_STAGES, limited);
-        
-        float abs_out = fabsf(output);
-        if (abs_out > state->peak_output) {
-            state->peak_output = abs_out;
-        }
-        state->average_power_out += output * output;
-        state->sample_count++;
-        
-        samples[i] = output * AUDIO_SCALE_OUT;
+    state->average_power_in += sample * sample;
+
+    // STAGE 1: Hilbert envelope detection
+    float q = apply_fir_filter(hilbert_coeffs, state->hilbert_delay, &state->hilbert_index,
+                               HILBERT_TAPS, sample);
+
+    float i_delayed = get_delayed_sample(state->delay_line, &state->delay_index,
+                                         hilbert_delay_len, sample);
+
+    float envelope = sqrtf(i_delayed * i_delayed + q * q);
+
+    // STAGE 2: Hard clip based on envelope
+    float clipped;
+    if (envelope > state->clip_level && envelope > 1e-10f) {
+      float gain = state->clip_level / envelope;
+      clipped = i_delayed * gain;
+    } else {
+      clipped = i_delayed;
     }
+
+    float abs_clip = fabsf(clipped);
+    if (abs_clip > state->peak_after_clip) {
+      state->peak_after_clip = abs_clip;
+    }
+
+    // STAGE 3: Overshoot control filter
+    float filtered =
+        apply_fir_filter(overshoot_coeffs, state->overshoot_delay, &state->overshoot_index,
+                         OVERSHOOT_FILTER_TAPS, clipped);
+
+    float abs_filt = fabsf(filtered);
+    if (abs_filt > state->peak_after_overshoot) {
+      state->peak_after_overshoot = abs_filt;
+    }
+
+    // STAGE 4: Second Hilbert envelope detection
+    float q2 = apply_fir_filter(hilbert_coeffs, state->hilbert2_delay,
+                                &state->hilbert2_index, HILBERT_TAPS, filtered);
+
+    float i2_delayed = get_delayed_sample(state->delay2_line, &state->delay2_index,
+                                          hilbert_delay_len, filtered);
+
+    float envelope2 = sqrtf(i2_delayed * i2_delayed + q2 * q2);
+
+    // STAGE 5: Look-ahead limiter
+    float limited = lookahead_limiter_process(&state->lookahead, i2_delayed, envelope2,
+                                              state->envelope_limit);
+
+    if (state->lookahead.current_gain < state->min_limiter_gain) {
+      state->min_limiter_gain = state->lookahead.current_gain;
+    }
+
+    // STAGE 6: Post-limiter lowpass filter
+    float output = apply_biquad_cascade(post_lpf_coeffs, state->post_lpf_state,
+                                        POST_LPF_BIQUAD_STAGES, limited);
+
+    float abs_out = fabsf(output);
+    if (abs_out > state->peak_output) {
+      state->peak_output = abs_out;
+    }
+    state->average_power_out += output * output;
+    state->sample_count++;
+
+    samples[i] = output * AUDIO_SCALE_OUT;
+  }
 }
 
 void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples) {
-    if (!state->enabled) {
-        return;
-    }
-    
-    const float scale_in  = AUDIO_PEAK_LEVEL / 2147483648.0f;
-    const float scale_out = 2147483647.0f / AUDIO_PEAK_LEVEL;
-    
-    float temp_buffer[64];
-    int remaining = num_samples;
-    int offset = 0;
-    
-    while (remaining > 0) {
-        int block_size = (remaining > 64) ? 64 : remaining;
-        
-        for (int j = 0; j < block_size; j++) {
-            temp_buffer[j] = (float)samples[offset + j] * scale_in;
-        }
-        
-        cessb_process(state, temp_buffer, block_size);
-        
-        for (int j = 0; j < block_size; j++) {
-            float out = temp_buffer[j] * scale_out;
-            if (out >  2147483647.0f) out =  2147483647.0f;
-            if (out < -2147483648.0f) out = -2147483648.0f;
-            samples[offset + j] = (int32_t)out;
-        }
-        
-        offset    += block_size;
-        remaining -= block_size;
+  if (!state->enabled) {
+    return;
+  }
+
+  const float scale_in = AUDIO_PEAK_LEVEL / 2147483648.0f;
+  const float scale_out = 2147483647.0f / AUDIO_PEAK_LEVEL;
+
+  float temp_buffer[64];
+  int remaining = num_samples;
+  int offset = 0;
+
+  while (remaining > 0) {
+    int block_size = (remaining > 64) ? 64 : remaining;
+
+    for (int j = 0; j < block_size; j++) {
+      temp_buffer[j] = (float)samples[offset + j] * scale_in;
     }
 
-    // Simple periodic stats print
-    static unsigned long last_sample_count = 0;
+    cessb_process(state, temp_buffer, block_size);
 
-    if (state->sample_count - last_sample_count >= 1000000UL) {
-        last_sample_count = state->sample_count;
-        cessb_debug_print_stats(state);
+    for (int j = 0; j < block_size; j++) {
+      float out = temp_buffer[j] * scale_out;
+      if (out > 2147483647.0f) out = 2147483647.0f;
+      if (out < -2147483648.0f) out = -2147483648.0f;
+      samples[offset + j] = (int32_t)out;
     }
+
+    offset += block_size;
+    remaining -= block_size;
+  }
+
+  // Simple periodic stats print
+  static unsigned long last_sample_count = 0;
+
+  if (state->sample_count - last_sample_count >= 1000000UL) {
+    last_sample_count = state->sample_count;
+    cessb_debug_print_stats(state);
+  }
 }
 
 // ============================================================================
 // STATISTICS
 // ============================================================================
 
-void cessb_get_stats(cessb_state_t *state, float *peak_reduction_db, float *avg_power_gain_db) {
-    if (state->sample_count == 0) {
-        *peak_reduction_db = 0.0f;
-        *avg_power_gain_db = 0.0f;
-        return;
-    }
-    
-    if (state->peak_input > 1e-10f && state->peak_output > 1e-10f) {
-        *peak_reduction_db = 20.0f * log10f(state->peak_output / state->peak_input);
-    } else {
-        *peak_reduction_db = 0.0f;
-    }
-    
-    float avg_power_in = state->average_power_in / state->sample_count;
-    float avg_power_out = state->average_power_out / state->sample_count;
-    
-    if (avg_power_in > 1e-10f && avg_power_out > 1e-10f) {
-        *avg_power_gain_db = 10.0f * log10f(avg_power_out / avg_power_in);
-    } else {
-        *avg_power_gain_db = 0.0f;
-    }
+void cessb_get_stats(cessb_state_t *state, float *peak_reduction_db,
+                     float *avg_power_gain_db) {
+  if (state->sample_count == 0) {
+    *peak_reduction_db = 0.0f;
+    *avg_power_gain_db = 0.0f;
+    return;
+  }
+
+  if (state->peak_input > 1e-10f && state->peak_output > 1e-10f) {
+    *peak_reduction_db = 20.0f * log10f(state->peak_output / state->peak_input);
+  } else {
+    *peak_reduction_db = 0.0f;
+  }
+
+  float avg_power_in = state->average_power_in / state->sample_count;
+  float avg_power_out = state->average_power_out / state->sample_count;
+
+  if (avg_power_in > 1e-10f && avg_power_out > 1e-10f) {
+    *avg_power_gain_db = 10.0f * log10f(avg_power_out / avg_power_in);
+  } else {
+    *avg_power_gain_db = 0.0f;
+  }
 }
 
 void cessb_reset_stats(cessb_state_t *state) {
-    state->peak_input = 0.0f;
-    state->peak_output = 0.0f;
-    state->peak_after_clip = 0.0f;
-    state->peak_after_overshoot = 0.0f;
-    state->average_power_in = 0.0f;
-    state->average_power_out = 0.0f;
-    state->min_limiter_gain = 1.0f;
-    state->sample_count = 0;
-
+  state->peak_input = 0.0f;
+  state->peak_output = 0.0f;
+  state->peak_after_clip = 0.0f;
+  state->peak_after_overshoot = 0.0f;
+  state->average_power_in = 0.0f;
+  state->average_power_out = 0.0f;
+  state->min_limiter_gain = 1.0f;
+  state->sample_count = 0;
 }
-
