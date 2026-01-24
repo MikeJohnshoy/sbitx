@@ -24,7 +24,6 @@
 //   one-in/one-out with constant LA latency.
 //
 // Assumptions:
-// - sbitx TX chain normalizes audio samples to range between ~ +/- 0.04f
 // - num_samples <= 1024 (matches sbitx tx_process block sizing)
 // - sample_rate is constant (96 kHz)
 //
@@ -37,16 +36,15 @@
 #include "cessb.h"
 
 // Tunables
-#define SBITX_AUDIO_PEAK_NORM  0.04f                            // sbitx audio samples range +/- 0.04
-#define CESSB_AUDIO_PEAK_LIMIT (SBITX_AUDIO_PEAK_NORM * 0.90f)  // Stage 1 peak limit (pre-Hilbert)
-#define CESSB_AUDIO_PRE_FC     4000.0f                          // Stage 1 LPF cutoff (~4 kHz)
-#define CESSB_RF_CLIP_LEVEL    (SBITX_AUDIO_PEAK_NORM * 1.05f)  // Stage 2 complex-envelope clip
-#define CESSB_LA_SAMPLES 96                                     // look-ahead window length in samples (≈1ms @ 96kHz)
-#define CESSB_BLOCK_MAX 1024                                    // expected maximum block size
+#define CESSB_AUDIO_PEAK_LIMIT   0.9f     // Stage 1 peak limit (pre-Hilbert)
+#define CESSB_AUDIO_PRE_FC       4000.0f  // Stage 1 LPF cutoff (~4 kHz)
+#define CESSB_RF_CLIP_LEVEL      1.05f    // Stage 2 complex-envelope clip
+#define CESSB_LA_SAMPLES 96       // look-ahead window length in samples (≈1ms @ 96kHz)
+#define CESSB_BLOCK_MAX 1024      // expected maximum block size
 #define CESSB_RING_MAX (CESSB_LA_SAMPLES + CESSB_BLOCK_MAX)
-#define CESSB_GAIN_ATTACK_MS 0.05f                              // gain smoothing time constants (ms)
+#define CESSB_GAIN_ATTACK_MS 0.05f  // gain smoothing time constants (ms)
 #define CESSB_GAIN_RELEASE_MS 15.0f
-#define CESSB_OUTPUT_GUARD (SBITX_AUDIO_PEAK_NORM * 0.99f)      // final soft-clip guard threshold
+#define CESSB_OUTPUT_GUARD 0.99f  // final soft-clip guard threshold
 #define HILBERT_DELAY_LEN (HILBERT_TAPS / 2)  
 
 // Debug control: gap-based transmission detection
@@ -446,7 +444,3 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->average_power_in = 0.0f;
   state->average_power_out = 0.0f;
 }
-
-
-
-
