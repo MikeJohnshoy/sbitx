@@ -1677,9 +1677,9 @@ void tx_process(
     if (cessb_enabled && (r->mode == MODE_USB || r->mode == MODE_LSB))
     {
       if (use_browser_mic) {
-          cessb_process_int32(&cessb_processor, browser_mic_samples, n_samples, 96000.0f);
+          cessb_process_int32(&cessb_processor, browser_mic_samples, n_samples);
       } else {
-          cessb_process_int32(&cessb_processor, input_mic, n_samples, 96000.0f);
+          cessb_process_int32(&cessb_processor, input_mic, n_samples);
       }
     }
 	}
@@ -2331,7 +2331,7 @@ void setup()
 	jitter_buffer_samples = 0;
 
 	modem_init();
-  cessb_init(&cessb_processor);  // initialize CESSB processor
+  cessb_init(&cessb_processor, 96000.0f);  // initialize CESSB processor
 
 	add_rx(7000000, MODE_LSB, -3000, -300);
 	add_tx(7000000, MODE_LSB, -3000, -300);
