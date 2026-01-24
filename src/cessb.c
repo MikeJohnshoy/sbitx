@@ -1,446 +1,474 @@
 // CESSB (Controlled Envelope Single Sideband) Processing Implementation
 //
-// Implementation based on the technique described by David Hershberger, W9GR
-// in QEX November/December 2014: "Controlled Envelope Single Sideband".
+// Reference: "Controlled Envelope Single Sideband" by David Hershberger, W9GR
+//            QEX November/December 2014
 //
-// Three-stage CESSB chain:
-// 1) Prefilter and peak-limit the audio input before the Hilbert transform.
-// 2) Baseband “RF” clipping on the analytic I/Q via magnitude clipping.
-// 3) Overshoot compensation using a per-sample look-ahead envelope limiter with
-//    attack/release smoothing, a hard envelope cap, post-LPF, and a soft-clip
-//    guard on the real output.
+// Concept:
+// CESSB increases average SSB transmit power by 2-3 dB without increasing peak
+// envelope power (PEP). This is achieved by controlling envelope overshoot that
+// normally occurs when clipped audio is filtered.
 //
-// Concept (streaming):
-// - Process blocks from the caller, but internally treat samples as a stream.
-// - Fixed look-ahead window of LA samples (≈1 ms at 96 kHz) with a delay line.
-// - One input sample produces one output sample after the LA-sample delay.
-// - Build analytic I/Q and envelope per sample.
-// - Stage 1: prefilter + peak limit on audio before Hilbert/delay.
-// - Stage 2: magnitude clip on analytic I/Q to reduce Hilbert overshoot.
-// - Stage 3: per-sample look-ahead gain from the window, smooth
-//   (attack/release), hard-cap envelope if needed, post-filter the real part,
-//   and soft-clip guard the final output.
-// - Initial fill: the first LA samples output as zeros; steady-state emits
-//   one-in/one-out with constant LA latency.
+// The key innovation is the "overshoot control filter" - a specially designed
+// lowpass filter that prevents clipped signals from regenerating envelope peaks
+// when passed through the SSB transmit bandwidth filter.
 //
-// Assumptions:
-// - num_samples <= 1024 (matches sbitx tx_process block sizing)
-// - sample_rate is constant (96 kHz)
+// Processing chain:
+// - Input audio samples integers, converted to float (±0.04)
+// - Normalize to ±1.0
+// - Hilbert Transform (127taps)
+// - Hard Clip (envelope based)to CESSB_CLIP_LEVEL
+// - Overshoot Control Blackman-Harris windowed LPF @ 3kHz prevents overshoot regeneration
+// - Hilbert Transform to re-measure envelope after filtering
+// - Look-Ahead final envelope limiting with configurable look-ahead (up to 1024 samples)
+//   Smooth attack/release gain control
+// - Post-Limiter LPF│  6th-order Butterworth @ 3kHz
+//   Removes residual out-of-band content
+// - Scale to ±0.04  and convert back to integer before 
+//    returning processed data to tx_process pipeline
+//
+// Key configuration 'knobs' (see cessb.h)
+//
+//   CESSB_CLIP_LEVEL              Initial clip threshold (default 0.85)
+//   CESSB_ENVELOPE_LIMIT          Final limiter ceiling (default 1.0)
+//   LOOKAHEAD_DEFAULT_SAMPLES     default ~2ms at 96kHz
+//   LOOKAHEAD_DEFAULT_ATTACK_MS   Limiter attack (default 0.5 ms)
+//   LOOKAHEAD_DEFAULT_RELEASE_MS  Limiter release (default 50 ms)
 //
 // added by Mike KB2ML and Bob KD8CGH
 
-#include <math.h>
+#include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
-#include <time.h>  // for debug stats only
+#include <math.h>
 #include "cessb.h"
 
-// Tunables
-#define CESSB_AUDIO_PEAK_LIMIT   0.9f     // Stage 1 peak limit (pre-Hilbert)
-#define CESSB_AUDIO_PRE_FC       4000.0f  // Stage 1 LPF cutoff (~4 kHz)
-#define CESSB_RF_CLIP_LEVEL      1.05f    // Stage 2 complex-envelope clip
-#define CESSB_LA_SAMPLES 96       // look-ahead window length in samples (≈1ms @ 96kHz)
-#define CESSB_BLOCK_MAX 1024      // expected maximum block size
-#define CESSB_RING_MAX (CESSB_LA_SAMPLES + CESSB_BLOCK_MAX)
-#define CESSB_GAIN_ATTACK_MS 0.05f  // gain smoothing time constants (ms)
-#define CESSB_GAIN_RELEASE_MS 15.0f
-#define CESSB_OUTPUT_GUARD 0.99f  // final soft-clip guard threshold
-#define HILBERT_DELAY_LEN (HILBERT_TAPS / 2)  
+// ============================================================================
+// SIGNAL SCALING
+// ============================================================================
+#define AUDIO_PEAK_LEVEL 0.04f
+#define AUDIO_SCALE_IN   (1.0f / AUDIO_PEAK_LEVEL)
+#define AUDIO_SCALE_OUT  AUDIO_PEAK_LEVEL
 
-// Debug control: gap-based transmission detection
-static struct timespec debug_last_ts = {0, 0};
-static int debug_have_ts = 0;
-#define DEBUG_IDLE_GAP_S 0.25  // treat gaps > 250 ms as a new transmission
+// ============================================================================
+// PRECOMPUTED FILTER COEFFICIENTS
+// Generated for: 96000 Hz sample rate, 3000 Hz audio cutoff
+// To regenerate: python generate_cessb_coeffs.py
+// ============================================================================
 
-// global CESSB state
-int cessb_enabled = 0;
-cessb_state_t cessb_processor;
-
-// Look-ahead window (length = CESSB_LA_SAMPLES) for streaming processing
-static float la_ring_i[CESSB_LA_SAMPLES];
-static float la_ring_q[CESSB_LA_SAMPLES];
-static float la_ring_env[CESSB_LA_SAMPLES];
-static int   la_head = 0;      // index of oldest sample in window
-static int   la_len  = 0;      // number of samples currently buffered
-static float la_gain = 1.0f;   // smoothed gain state
-
-static inline void cessb_la_block_reset(void) {
-  la_head = 0;
-  la_len = 0;
-  la_gain = 1.0f;
-  memset(la_ring_i, 0, sizeof(la_ring_i));
-  memset(la_ring_q, 0, sizeof(la_ring_q));
-  memset(la_ring_env, 0, sizeof(la_ring_env));
-}
-
-// Hilbert transform coefficients (127-tap equiripple FIR, Type IV)
-// Design (scipy.signal.remez): 
-//   Sample rate:        96000 Hz
-//   Passband:           250 – 3500 Hz  
-//   Transition width:   ~200 Hz
-//   Passband ripple:    < 0.1 dB
-//   Stopband atten:     > 50 dB
-//   Group delay:        63 samples
-// Antisymmetric (Type IV FIR): h[n] = -h[N-1-n], all taps used
+// Hilbert transform filter (127 taps, Blackman window)
 static const float hilbert_coeffs[HILBERT_TAPS] = {
-    -0.037764f, -0.010794f, -0.011979f, -0.012843f, -0.013441f, -0.013775f, -0.013656f, -0.013168f,
-    -0.012250f, -0.010955f, -0.009276f, -0.007232f, -0.004877f, -0.002271f,  0.000492f,  0.003327f,
-     0.006151f,  0.008874f,  0.011418f,  0.013688f,  0.015611f,  0.017117f,  0.018165f,  0.018728f,
-     0.018798f,  0.018390f,  0.017542f,  0.016312f,  0.014784f,  0.013051f,  0.011221f,  0.009406f,
-     0.007727f,  0.006304f,  0.005253f,  0.004678f,  0.004664f,  0.005279f,  0.006563f,  0.008531f,
-     0.011168f,  0.014425f,  0.018227f,  0.022469f,  0.027025f,  0.031746f,  0.036469f,  0.041019f,
-     0.045218f,  0.048889f,  0.051866f,  0.054001f,  0.055164f,  0.055256f,  0.054207f,  0.051985f,
-     0.048596f,  0.044082f,  0.038523f,  0.032030f,  0.024749f,  0.016852f,  0.008533f,  0.000000f,
-    -0.008533f, -0.016852f, -0.024749f, -0.032030f, -0.038523f, -0.044082f, -0.048596f, -0.051985f,
-    -0.054207f, -0.055256f, -0.055164f, -0.054001f, -0.051866f, -0.048889f, -0.045218f, -0.041019f,
-    -0.036469f, -0.031746f, -0.027025f, -0.022469f, -0.018227f, -0.014425f, -0.011168f, -0.008531f,
-    -0.006563f, -0.005279f, -0.004664f, -0.004678f, -0.005253f, -0.006304f, -0.007727f, -0.009406f,
-    -0.011221f, -0.013051f, -0.014784f, -0.016312f, -0.017542f, -0.018390f, -0.018798f, -0.018728f,
-    -0.018165f, -0.017117f, -0.015611f, -0.013688f, -0.011418f, -0.008874f, -0.006151f, -0.003327f,
-    -0.000492f,  0.002271f,  0.004877f,  0.007232f,  0.009276f,  0.010955f,  0.012250f,  0.013168f,
-     0.013656f,  0.013775f,  0.013441f,  0.012843f,  0.011979f,  0.010794f,  0.037764f
+     1.40236097e-19f,  0.00000000e+00f, -9.37617092e-06f,  0.00000000e+00f, -3.91882957e-05f,
+     0.00000000e+00f, -9.28426066e-05f,  0.00000000e+00f, -1.75022280e-04f,  0.00000000e+00f,
+    -2.91799050e-04f,  0.00000000e+00f, -4.50725486e-04f,  0.00000000e+00f, -6.60910489e-04f,
+     0.00000000e+00f, -9.33083247e-04f,  0.00000000e+00f, -1.27965419e-03f,  0.00000000e+00f,
+    -1.71478569e-03f,  0.00000000e+00f, -2.25449075e-03f,  0.00000000e+00f, -2.91678511e-03f,
+     0.00000000e+00f, -3.72192860e-03f,  0.00000000e+00f, -4.69280630e-03f,  0.00000000e+00f,
+    -5.85552231e-03f,  0.00000000e+00f, -7.24031348e-03f,  0.00000000e+00f, -8.88294600e-03f,
+     0.00000000e+00f, -1.08268500e-02f,  0.00000000e+00f, -1.31264051e-02f,  0.00000000e+00f,
+    -1.58520727e-02f,  0.00000000e+00f, -1.90985932e-02f,  0.00000000e+00f, -2.29984892e-02f,
+     0.00000000e+00f, -2.77452162e-02f,  0.00000000e+00f, -3.36349290e-02f,  0.00000000e+00f,
+    -4.11468657e-02f,  0.00000000e+00f, -5.11114405e-02f,  0.00000000e+00f, -6.51024086e-02f,
+     0.00000000e+00f, -8.65011541e-02f,  0.00000000e+00f, -1.24114929e-01f,  0.00000000e+00f,
+    -2.10267285e-01f,  0.00000000e+00f, -6.35971008e-01f,  0.00000000e+00f,  6.35971008e-01f,
+     0.00000000e+00f,  2.10267285e-01f,  0.00000000e+00f,  1.24114929e-01f,  0.00000000e+00f,
+     8.65011541e-02f,  0.00000000e+00f,  6.51024086e-02f,  0.00000000e+00f,  5.11114405e-02f,
+     0.00000000e+00f,  4.11468657e-02f,  0.00000000e+00f,  3.36349290e-02f,  0.00000000e+00f,
+     2.77452162e-02f,  0.00000000e+00f,  2.29984892e-02f,  0.00000000e+00f,  1.90985932e-02f,
+     0.00000000e+00f,  1.58520727e-02f,  0.00000000e+00f,  1.31264051e-02f,  0.00000000e+00f,
+     1.08268500e-02f,  0.00000000e+00f,  8.88294600e-03f,  0.00000000e+00f,  7.24031348e-03f,
+     0.00000000e+00f,  5.85552231e-03f,  0.00000000e+00f,  4.69280630e-03f,  0.00000000e+00f,
+     3.72192860e-03f,  0.00000000e+00f,  2.91678511e-03f,  0.00000000e+00f,  2.25449075e-03f,
+     0.00000000e+00f,  1.71478569e-03f,  0.00000000e+00f,  1.27965419e-03f,  0.00000000e+00f,
+     9.33083247e-04f,  0.00000000e+00f,  6.60910489e-04f,  0.00000000e+00f,  4.50725486e-04f,
+     0.00000000e+00f,  2.91799050e-04f,  0.00000000e+00f,  1.75022280e-04f,  0.00000000e+00f,
+     9.28426066e-05f,  0.00000000e+00f,  3.91882957e-05f,  0.00000000e+00f,  9.37617092e-06f,
+     0.00000000e+00f, -1.40236097e-19f
 };
 
-// DSP helpers
-static inline float soft_clip(float sample, float threshold) {
-  if (sample > threshold) {
-    return threshold + (sample - threshold) / (1.0f + fabsf(sample - threshold));
-  } else if (sample < -threshold) {
-    return -threshold + (sample + threshold) / (1.0f + fabsf(sample + threshold));
-  }
-  return sample;
+// Overshoot control filter (65 taps, Blackman-Harris window)
+// Lowpass, cutoff 3000 Hz, normalized fc = 0.031250
+static const float overshoot_coeffs[OVERSHOOT_FILTER_TAPS] = {
+    -1.55789393e-22f, -4.25971371e-07f, -2.84081374e-06f, -1.00466862e-05f, -2.62075167e-05f,
+    -5.70680120e-05f, -1.09643317e-04f, -1.91176866e-04f, -3.07228071e-04f, -4.58862990e-04f,
+    -6.39078438e-04f, -8.28780584e-04f, -9.92837463e-04f, -1.07689533e-03f, -1.00574960e-03f,
+    -6.84053239e-04f,  5.64658657e-19f,  1.16767022e-03f,  2.93941582e-03f,  5.42196095e-03f,
+     8.69377583e-03f,  1.27905065e-02f,  1.76921839e-02f,  2.33141094e-02f,  2.95031125e-02f,
+     3.60404042e-02f,  4.26515434e-02f,  4.90231806e-02f,  5.48253530e-02f,  5.97373084e-02f,
+     6.34742558e-02f,  6.58121708e-02f,  6.66078871e-02f,  6.58121708e-02f,  6.34742558e-02f,
+     5.97373084e-02f,  5.48253530e-02f,  4.90231806e-02f,  4.26515434e-02f,  3.60404042e-02f,
+     2.95031125e-02f,  2.33141094e-02f,  1.76921839e-02f,  1.27905065e-02f,  8.69377583e-03f,
+     5.42196095e-03f,  2.93941582e-03f,  1.16767022e-03f,  5.64658657e-19f, -6.84053239e-04f,
+    -1.00574960e-03f, -1.07689533e-03f, -9.92837463e-04f, -8.28780584e-04f, -6.39078438e-04f,
+    -4.58862990e-04f, -3.07228071e-04f, -1.91176866e-04f, -1.09643317e-04f, -5.70680120e-05f,
+    -2.62075167e-05f, -1.00466862e-05f, -2.84081374e-06f, -4.25971371e-07f, -1.55789393e-22f
+};
+
+// Post-limiter LPF (6th-order Butterworth, 3000 Hz)
+// Each row: b0, b1, b2, a1, a2
+static const float post_lpf_coeffs[POST_LPF_BIQUAD_STAGES][5] = {
+    {  8.08399021e-03f,  1.61679804e-02f,  8.08399021e-03f, -1.65053850e+00f,  6.82874458e-01f },
+    {  8.44269293e-03f,  1.68853859e-02f,  8.44269293e-03f, -1.72377617e+00f,  7.57546944e-01f },
+    {  9.14557162e-03f,  1.82911432e-02f,  9.14557162e-03f, -1.86728554e+00f,  9.03867829e-01f }
+};
+
+// Global instance
+int cessb_enabled = CESSB_DISABLED;
+cessb_state_t cessb_processor;
+
+// ============================================================================
+// ATTACK/RELEASE COEFFICIENT CALCULATION
+// ============================================================================
+
+static float time_constant_to_coeff(float time_ms, float sample_rate) {
+    if (time_ms <= 0.0f) return 1.0f;
+    float time_samples = (time_ms / 1000.0f) * sample_rate;
+    return 1.0f - expf(-1.0f / time_samples);
 }
 
-static float hilbert_transform(cessb_state_t *state, float input) {
-  state->hilbert_delay[state->hilbert_index] = input;
-  float output = 0.0f;
-  int idx = state->hilbert_index;
-  for (int i = 0; i < HILBERT_TAPS; i++) {
-    output += state->hilbert_delay[idx] * hilbert_coeffs[i];
-    idx--;
-    if (idx < 0) idx = HILBERT_TAPS - 1;
-  }
-  state->hilbert_index++;
-  if (state->hilbert_index >= HILBERT_TAPS) state->hilbert_index = 0;
-  return output;
+// ============================================================================
+// FIR FILTER PROCESSING
+// ============================================================================
+
+static float apply_fir_filter(const float *coeffs, float *delay, int *index, int num_taps, float input) {
+    delay[*index] = input;
+    
+    float output = 0.0f;
+    int idx = *index;
+    
+    for (int i = 0; i < num_taps; i++) {
+        output += coeffs[i] * delay[idx];
+        idx--;
+        if (idx < 0) idx = num_taps - 1;
+    }
+    
+    (*index)++;
+    if (*index >= num_taps) *index = 0;
+    
+    return output;
 }
 
-// get delayed sample (compensates for Hilbert transform group delay)
-static float delay_sample(cessb_state_t *state, float input) {
-  float output = state->delay_line[state->delay_index];
-  state->delay_line[state->delay_index] = input;
-  state->delay_index++;
-  if (state->delay_index >= HILBERT_DELAY_LEN) state->delay_index = 0;
-  return output;
+static float get_delayed_sample(float *delay, int *index, int delay_length, float input) {
+    float output = delay[*index];
+    delay[*index] = input;
+    
+    (*index)++;
+    if (*index >= delay_length) *index = 0;
+    
+    return output;
 }
 
-// State helpers
-void cessb_init(cessb_state_t *state) {
-  memset(state, 0, sizeof(cessb_state_t));
-  state->enabled = 0;
-  state->clip_level = CESSB_CLIP_LEVEL;
-  state->envelope_limit = CESSB_ENVELOPE_LIMIT;
-  state->hilbert_index = 0;
-  state->delay_index = 0;
-  cessb_la_block_reset();
+// ============================================================================
+// BIQUAD FILTER PROCESSING
+// ============================================================================
+
+static float apply_biquad(const float *coeffs, biquad_state_t *state, float input) {
+    float output = coeffs[0] * input 
+                 + coeffs[1] * state->x1 
+                 + coeffs[2] * state->x2
+                 - coeffs[3] * state->y1 
+                 - coeffs[4] * state->y2;
+    
+    state->x2 = state->x1;
+    state->x1 = input;
+    state->y2 = state->y1;
+    state->y1 = output;
+    
+    return output;
+}
+
+static float apply_biquad_cascade(const float coeffs[][5], biquad_state_t *states, 
+                                   int num_stages, float input) {
+    float output = input;
+    for (int i = 0; i < num_stages; i++) {
+        output = apply_biquad(coeffs[i], &states[i], output);
+    }
+    return output;
+}
+
+// ============================================================================
+// LOOK-AHEAD LIMITER
+// ============================================================================
+
+static void lookahead_limiter_init(lookahead_limiter_t *lim, float sample_rate) {
+    memset(lim->delay, 0, sizeof(lim->delay));
+    memset(lim->envelope, 0, sizeof(lim->envelope));
+    lim->write_index = 0;
+    lim->lookahead_samples = LOOKAHEAD_DEFAULT_SAMPLES;
+    lim->current_gain = 1.0f;
+    lim->peak_hold = 0.0f;
+    
+    lim->attack_coeff = time_constant_to_coeff(LOOKAHEAD_DEFAULT_ATTACK_MS, sample_rate);
+    lim->release_coeff = time_constant_to_coeff(LOOKAHEAD_DEFAULT_RELEASE_MS, sample_rate);
+}
+
+static float find_peak_in_window(lookahead_limiter_t *lim) {
+    float peak = 0.0f;
+    int read_index = lim->write_index;
+    
+    for (int i = 0; i < lim->lookahead_samples; i++) {
+        if (lim->envelope[read_index] > peak) {
+            peak = lim->envelope[read_index];
+        }
+        read_index++;
+        if (read_index >= LOOKAHEAD_MAX_SAMPLES) read_index = 0;
+    }
+    
+    return peak;
+}
+
+static float lookahead_limiter_process(lookahead_limiter_t *lim, float input, 
+                                        float envelope, float limit) {
+    lim->delay[lim->write_index] = input;
+    lim->envelope[lim->write_index] = envelope;
+    
+    int read_index = lim->write_index - lim->lookahead_samples;
+    if (read_index < 0) read_index += LOOKAHEAD_MAX_SAMPLES;
+    
+    float peak_envelope = find_peak_in_window(lim);
+    
+    float target_gain = 1.0f;
+    if (peak_envelope > limit && peak_envelope > 1e-10f) {
+        target_gain = limit / peak_envelope;
+    }
+    
+    if (target_gain < lim->current_gain) {
+        lim->current_gain += lim->attack_coeff * (target_gain - lim->current_gain);
+    } else {
+        lim->current_gain += lim->release_coeff * (target_gain - lim->current_gain);
+    }
+    
+    if (lim->current_gain < 0.0f) lim->current_gain = 0.0f;
+    if (lim->current_gain > 1.0f) lim->current_gain = 1.0f;
+    
+    float output = lim->delay[read_index] * lim->current_gain;
+    
+    lim->write_index++;
+    if (lim->write_index >= LOOKAHEAD_MAX_SAMPLES) lim->write_index = 0;
+    
+    return output;
+}
+
+// ============================================================================
+// CESSB INITIALIZATION AND CONFIGURATION
+// ============================================================================
+
+void cessb_init(cessb_state_t *state, float sample_rate) {
+    memset(state, 0, sizeof(cessb_state_t));
+    
+    state->enabled = CESSB_DISABLED;
+    state->clip_level = CESSB_CLIP_LEVEL;
+    state->envelope_limit = CESSB_ENVELOPE_LIMIT;
+    state->sample_rate = sample_rate;
+    
+    state->hilbert_index = 0;
+    state->delay_index = 0;
+    state->overshoot_index = 0;
+    state->hilbert2_index = 0;
+    state->delay2_index = 0;
+    
+    lookahead_limiter_init(&state->lookahead, sample_rate);
+    
+    cessb_reset_stats(state);
 }
 
 void cessb_set_enabled(cessb_state_t *state, int enabled) {
-  state->enabled = enabled ? 1 : 0;
-  if (enabled) {
-    // reset filter states when enabling
-    memset(state->hilbert_delay, 0, sizeof(state->hilbert_delay));
-    memset(state->delay_line, 0, sizeof(state->delay_line));
-    cessb_la_block_reset();
-    cessb_reset_stats(state);
-
-    // Force next block to be treated as a new transmission
-    debug_have_ts = 0;
-    debug_last_ts.tv_sec = 0;
-    debug_last_ts.tv_nsec = 0;
-  } else {
-    // On disable, also force next enable to look like a fresh transmission
-    debug_have_ts = 0;
-    debug_last_ts.tv_sec = 0;
-    debug_last_ts.tv_nsec = 0;
-  }
+    state->enabled = enabled;
+    cessb_enabled = enabled;
 }
 
 void cessb_set_clip_level(cessb_state_t *state, float level) {
-  if (level > 0.0f && level <= 1.0f) {
-    state->clip_level = level;
-  }
+    if (level > 0.0f && level <= 1.0f) {
+        state->clip_level = level;
+    }
 }
 
 void cessb_set_envelope_limit(cessb_state_t *state, float limit) {
-  if (limit > 0.0f && limit <= 2.0f) {
-    state->envelope_limit = limit;
-  }
+    if (limit > 0.0f && limit <= 1.5f) {
+        state->envelope_limit = limit;
+    }
 }
 
 int cessb_is_enabled(cessb_state_t *state) {
-  return state->enabled;
+    return state->enabled;
 }
 
-// main process (float path)
-void cessb_process(cessb_state_t *state, float *samples, int num_samples,
-                   float sample_rate) {
-  if (!state->enabled || num_samples <= 0) return;
-  if (num_samples > CESSB_BLOCK_MAX) return;
+// ============================================================================
+// LOOK-AHEAD LIMITER CONFIGURATION
+// ============================================================================
 
-  // Precompute constants
-  const float post_alpha =
-      expf(-2.0f * (float)M_PI * CESSB_POST_LPF_CUTOFF / sample_rate);
-  const float att_a = expf(-(1.0f / (0.001f * CESSB_GAIN_ATTACK_MS)) / sample_rate);
-  const float rel_a = expf(-(1.0f / (0.001f * CESSB_GAIN_RELEASE_MS)) / sample_rate);
-  const float audio_alpha = expf(-2.0f * (float)M_PI * CESSB_AUDIO_PRE_FC / sample_rate);
+void cessb_set_lookahead_samples(cessb_state_t *state, int samples) {
+    if (samples < 1) samples = 1;
+    if (samples > LOOKAHEAD_MAX_SAMPLES) samples = LOOKAHEAD_MAX_SAMPLES;
+    state->lookahead.lookahead_samples = samples;
+}
 
-  // Stage buffers
-  float cur_i[CESSB_BLOCK_MAX];
-  float cur_q[CESSB_BLOCK_MAX];
-  float cur_env[CESSB_BLOCK_MAX];
-  int outputs_emitted = 0;
-  int out_pos = 0;
+void cessb_set_lookahead_ms(cessb_state_t *state, float milliseconds) {
+    int samples = (int)((milliseconds / 1000.0f) * state->sample_rate + 0.5f);
+    cessb_set_lookahead_samples(state, samples);
+}
 
-  // Stats accumulators
-  float peak_in = 0.0f, peak_out = 0.0f;
-  float sum_sq_in = 0.0f, sum_sq_out = 0.0f;
+void cessb_set_attack_ms(cessb_state_t *state, float attack_ms) {
+    state->lookahead.attack_coeff = time_constant_to_coeff(attack_ms, state->sample_rate);
+}
 
-  // Stage 1: audio prefilter + peak limit (stateful one-pole)
-  static float audio_lpf_state = 0.0f;
-  for (int i = 0; i < num_samples; i++) {
-    float sample = samples[i];
+void cessb_set_release_ms(cessb_state_t *state, float release_ms) {
+    state->lookahead.release_coeff = time_constant_to_coeff(release_ms, state->sample_rate);
+}
+
+int cessb_get_lookahead_samples(cessb_state_t *state) {
+    return state->lookahead.lookahead_samples;
+}
+
+// ============================================================================
+// MAIN CESSB PROCESSING
+// ============================================================================
+
+void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
+    if (!state->enabled) {
+        return;
+    }
     
-    // Track input stats before anything is done
-    float abs_in = fabsf(sample);
-    if (abs_in > peak_in) peak_in = abs_in;
-    sum_sq_in += sample * sample;
-
-    // Prefilter
-    float audio_prefilt = (1.0f - audio_alpha) * sample + audio_alpha * audio_lpf_state;
-    audio_lpf_state = audio_prefilt;
-
-    // Peak limit
-    if (audio_prefilt > CESSB_AUDIO_PEAK_LIMIT) audio_prefilt = CESSB_AUDIO_PEAK_LIMIT;
-    if (audio_prefilt < -CESSB_AUDIO_PEAK_LIMIT) audio_prefilt = -CESSB_AUDIO_PEAK_LIMIT;
-
-    sample = audio_prefilt;  // replace input with Stage 1 output
-
-    // Analytic signal
-    float q = hilbert_transform(state, sample);
-    float ii = delay_sample(state, sample);
-
-    cur_i[i] = ii;
-    cur_q[i] = q;
-    cur_env[i] = sqrtf(ii * ii + q * q);
-  }
-
-  // Stage 2: magnitude clip on analytic I/Q
-  for (int i = 0; i < num_samples; i++) {
-    float mag = hypotf(cur_i[i], cur_q[i]);
-    if (mag > CESSB_RF_CLIP_LEVEL) {
-      float scale = CESSB_RF_CLIP_LEVEL / (mag + 1e-9f);  // avoid div/0
-      cur_i[i] *= scale;
-      cur_q[i] *= scale;
-      mag = CESSB_RF_CLIP_LEVEL;
-    }
-    cur_env[i] = mag;
-  }
-
-  // Stage 3: streaming look-ahead limiter with fixed LA-sample delay
-  for (int n = 0; n < num_samples; n++) {
-    // Push current sample into look-ahead window
-    int tail = (la_head + la_len) % CESSB_LA_SAMPLES;
-    la_ring_i[tail] = cur_i[n];
-    la_ring_q[tail] = cur_q[n];
-    la_ring_env[tail] = cur_env[n];
-    if (la_len < CESSB_LA_SAMPLES) la_len++;
-
-    // Emit once the window is full (fixed LA latency)
-    if (la_len == CESSB_LA_SAMPLES) {
-      // Compute envelope max over the window (LA=96 => cheap O(LA))
-      float env_max = 0.0f;
-      for (int k = 0; k < CESSB_LA_SAMPLES; k++) {
-        int idx = (la_head + k) % CESSB_LA_SAMPLES;
-        float ev = la_ring_env[idx];
-        if (ev > env_max) env_max = ev;
-      }
-
-      float g_target = 1.0f;
-      if (env_max > state->envelope_limit && env_max > 1e-9f) {
-        g_target = state->envelope_limit / env_max;
-      }
-
-      // Smooth gain per-sample
-      if (g_target < la_gain) {
-        la_gain = (1.0f - att_a) * g_target + att_a * la_gain;
-      } else {
-        la_gain = (1.0f - rel_a) * g_target + rel_a * la_gain;
-      }
-
-      // Oldest sample in the window is the one we emit now
-      float i_limited = la_ring_i[la_head] * la_gain;
-      float q_limited = la_ring_q[la_head] * la_gain;
-
-      // Hard envelope cap
-      float env2 = sqrtf(i_limited * i_limited + q_limited * q_limited);
-      if (env2 > state->envelope_limit && env2 > 0.0001f) {
-        float scale = state->envelope_limit / env2;
-        i_limited *= scale;
-        q_limited *= scale;
-      }
-
-      float output_unfiltered = i_limited;  // transmit real part
-      state->post_lpf_state =
-          (1.0f - post_alpha) * output_unfiltered + post_alpha * state->post_lpf_state;
-      float output = soft_clip(state->post_lpf_state, CESSB_OUTPUT_GUARD);
-
-      // Emit (one-out per input after fill)
-      if (out_pos < num_samples) {
-        samples[out_pos++] = output;
-      }
-
-      // Pop head
-      la_head = (la_head + 1) % CESSB_LA_SAMPLES;
-      la_len--;
-
-      // Stats
-      float abs_out = fabsf(output);
-      if (abs_out > peak_out) peak_out = abs_out;
-      sum_sq_out += output * output;
-      outputs_emitted++;
-    }
-  }
-
-  // If pipeline not yet full, pad the remainder of this block with zeros
-  for (int i = out_pos; i < num_samples; i++) {
-    samples[i] = 0.0f;
-  }
-
-  // update statistics
-  state->peak_input = 0.9f * state->peak_input + 0.1f * peak_in;
-  state->peak_output = 0.9f * state->peak_output + 0.1f * peak_out;
-  state->average_power_in =
-      0.95f * state->average_power_in + 0.05f * (sum_sq_in / num_samples);
-  if (outputs_emitted > 0) {
-    state->average_power_out =
-        0.95f * state->average_power_out + 0.05f * (sum_sq_out / outputs_emitted);
-  }
-}
-
-// called from tx_process in sbitx.c
-// gets block of integer samples, converts to float, processes, and converts back to int
-void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples,
-                         float sample_rate) {
-  // Debug session control (per transmission)
-  static int debug_active = 0;       // true while collecting/printing this transmission
-  static int debug_blocks_left = 0;  // countdown of blocks to process for debug
-  static float cessb_debug_accum_s = 0.0f;
-
-  if (!state->enabled || num_samples <= 0 || num_samples > 1024) {
-    printf("CESSB: unexpected input, num_samples: %d\n", num_samples);
-    return;
-  }
-
-  // Detect idle gap to infer a new transmission
-  int new_transmission = 0;
-  {
-    struct timespec now;
-    if (clock_gettime(CLOCK_MONOTONIC, &now) == 0) {
-      if (debug_have_ts) {
-        double dt = (now.tv_sec - debug_last_ts.tv_sec) +
-                    (now.tv_nsec - debug_last_ts.tv_nsec) / 1e9;
-        if (dt > DEBUG_IDLE_GAP_S) {
-          new_transmission = 1;
+    int hilbert_delay_len = (HILBERT_TAPS / 2) + 1;
+    
+    for (int i = 0; i < num_samples; i++) {
+        float sample = samples[i] * AUDIO_SCALE_IN;
+        
+        float abs_in = fabsf(sample);
+        if (abs_in > state->peak_input) {
+            state->peak_input = abs_in;
         }
-      } else {
-        // First call ever
-        new_transmission = 1;
-      }
-      debug_last_ts = now;
-      debug_have_ts = 1;
+        state->average_power_in += sample * sample;
+        
+        // STAGE 1: Hilbert envelope detection
+        float q = apply_fir_filter(hilbert_coeffs, state->hilbert_delay,
+                                   &state->hilbert_index, HILBERT_TAPS, sample);
+        
+        float i_delayed = get_delayed_sample(state->delay_line, &state->delay_index,
+                                              hilbert_delay_len, sample);
+        
+        float envelope = sqrtf(i_delayed * i_delayed + q * q);
+        
+        // STAGE 2: Hard clip based on envelope
+        float clipped;
+        if (envelope > state->clip_level && envelope > 1e-10f) {
+            float gain = state->clip_level / envelope;
+            clipped = i_delayed * gain;
+        } else {
+            clipped = i_delayed;
+        }
+        
+        float abs_clip = fabsf(clipped);
+        if (abs_clip > state->peak_after_clip) {
+            state->peak_after_clip = abs_clip;
+        }
+        
+        // STAGE 3: Overshoot control filter
+        float filtered = apply_fir_filter(overshoot_coeffs, state->overshoot_delay,
+                                          &state->overshoot_index, OVERSHOOT_FILTER_TAPS, clipped);
+        
+        float abs_filt = fabsf(filtered);
+        if (abs_filt > state->peak_after_overshoot) {
+            state->peak_after_overshoot = abs_filt;
+        }
+        
+        // STAGE 4: Second Hilbert envelope detection
+        float q2 = apply_fir_filter(hilbert_coeffs, state->hilbert2_delay,
+                                    &state->hilbert2_index, HILBERT_TAPS, filtered);
+        
+        float i2_delayed = get_delayed_sample(state->delay2_line, &state->delay2_index,
+                                               hilbert_delay_len, filtered);
+        
+        float envelope2 = sqrtf(i2_delayed * i2_delayed + q2 * q2);
+        
+        // STAGE 5: Look-ahead limiter
+        float limited = lookahead_limiter_process(&state->lookahead, i2_delayed, 
+                                                   envelope2, state->envelope_limit);
+        
+        if (state->lookahead.current_gain < state->min_limiter_gain) {
+            state->min_limiter_gain = state->lookahead.current_gain;
+        }
+        
+        // STAGE 6: Post-limiter lowpass filter
+        float output = apply_biquad_cascade(post_lpf_coeffs, state->post_lpf_state,
+                                            POST_LPF_BIQUAD_STAGES, limited);
+        
+        float abs_out = fabsf(output);
+        if (abs_out > state->peak_output) {
+            state->peak_output = abs_out;
+        }
+        state->average_power_out += output * output;
+        state->sample_count++;
+        
+        samples[i] = output * AUDIO_SCALE_OUT;
     }
-  }
-
-  // Start debug collection on each detected transmission start
-  if (new_transmission) {
-    cessb_reset_stats(state);  // clear accumulated data before starting
-    debug_active = 1;
-    debug_blocks_left = 500;  // process 500 blocks, then stop
-    cessb_debug_accum_s = 0.0f;
-  }
-
-  const float scale_to_float = 1.0f / 2000000000.0f;
-  const float scale_to_int32 = 2000000000.0f;
-
-  float float_samples[1024];
-
-  for (int i = 0; i < num_samples; i++) {
-    float_samples[i] = samples[i] * scale_to_float;
-  }
-
-  cessb_process(state, float_samples, num_samples, sample_rate);
-
-  for (int i = 0; i < num_samples; i++) {
-    float clamped = float_samples[i];
-    if (clamped > 1.0f) clamped = 1.0f;
-    if (clamped < -1.0f) clamped = -1.0f;
-    samples[i] = (int32_t)(clamped * scale_to_int32);
-  }
-
-  // CESSB demo/debug stats:
-  // - runs at the start of each transmission (detected via idle gap)
-  // - clears stats before starting
-  // - processes 500 blocks then stops until the next transmission
-  if (debug_active) {
-    cessb_debug_accum_s += (float)num_samples / sample_rate;
-
-    if (cessb_debug_accum_s >= 5.0f) {
-      cessb_debug_accum_s -= 5.0f;  // keep residual, handle non-integer multiples
-
-      float peak_red_db = 0.0f;
-      float avg_gain_db = 0.0f;
-      cessb_get_stats(state, &peak_red_db, &avg_gain_db);
-
-      // Note: peak_red_db will be negative if output peak < input peak.
-      printf(
-          "CESSB STATS: peak_in=%.3f peak_out=%.3f peak_reduction=%.2f dB "
-          "avg_power_in=%.6f avg_power_out=%.6f avg_power_gain=%.2f dB\n",
-          state->peak_input, state->peak_output, peak_red_db, state->average_power_in,
-          state->average_power_out, avg_gain_db);
-    }
-
-    // Stop collecting after 500 blocks in this transmission
-    if (--debug_blocks_left <= 0) {
-      debug_active = 0;
-    }
-  }
 }
 
-// stats
-void cessb_get_stats(cessb_state_t *state, float *peak_reduction_db,
-                     float *avg_power_gain_db) {
-  if (peak_reduction_db) {
-    if (state->peak_input > 0.0001f && state->peak_output > 0.0001f) {
-      *peak_reduction_db = 20.0f * log10f(state->peak_output / state->peak_input);
-    } else {
-      *peak_reduction_db = 0.0f;
+void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples) {
+    if (!state->enabled) {
+        return;
     }
-  }
+    
+    const float scale_in = AUDIO_PEAK_LEVEL / 2147483648.0f;
+    const float scale_out = 2147483647.0f / AUDIO_PEAK_LEVEL;
+    
+    float temp_buffer[64];
+    int remaining = num_samples;
+    int offset = 0;
+    
+    while (remaining > 0) {
+        int block_size = (remaining > 64) ? 64 : remaining;
+        
+        for (int j = 0; j < block_size; j++) {
+            temp_buffer[j] = (float)samples[offset + j] * scale_in;
+        }
+        
+        cessb_process(state, temp_buffer, block_size);
+        
+        for (int j = 0; j < block_size; j++) {
+            float out = temp_buffer[j] * scale_out;
+            if (out > 2147483647.0f) out = 2147483647.0f;
+            if (out < -2147483648.0f) out = -2147483648.0f;
+            samples[offset + j] = (int32_t)out;
+        }
+        
+        offset += block_size;
+        remaining -= block_size;
+    }
+}
 
-  if (avg_power_gain_db) {
-    if (state->average_power_in > 0.000001f && state->average_power_out > 0.000001f) {
-      *avg_power_gain_db =
-          10.0f * log10f(state->average_power_out / state->average_power_in);
-    } else {
-      *avg_power_gain_db = 0.0f;
+// ============================================================================
+// STATISTICS
+// ============================================================================
+
+void cessb_get_stats(cessb_state_t *state, float *peak_reduction_db, float *avg_power_gain_db) {
+    if (state->sample_count == 0) {
+        *peak_reduction_db = 0.0f;
+        *avg_power_gain_db = 0.0f;
+        return;
     }
-  }
+    
+    if (state->peak_input > 1e-10f && state->peak_output > 1e-10f) {
+        *peak_reduction_db = 20.0f * log10f(state->peak_output / state->peak_input);
+    } else {
+        *peak_reduction_db = 0.0f;
+    }
+    
+    float avg_power_in = state->average_power_in / state->sample_count;
+    float avg_power_out = state->average_power_out / state->sample_count;
+    
+    if (avg_power_in > 1e-10f && avg_power_out > 1e-10f) {
+        *avg_power_gain_db = 10.0f * log10f(avg_power_out / avg_power_in);
+    } else {
+        *avg_power_gain_db = 0.0f;
+    }
 }
 
 void cessb_reset_stats(cessb_state_t *state) {
-  state->peak_input = 0.0f;
-  state->peak_output = 0.0f;
-  state->average_power_in = 0.0f;
-  state->average_power_out = 0.0f;
+    state->peak_input = 0.0f;
+    state->peak_output = 0.0f;
+    state->peak_after_clip = 0.0f;
+    state->peak_after_overshoot = 0.0f;
+    state->average_power_in = 0.0f;
+    state->average_power_out = 0.0f;
+    state->min_limiter_gain = 1.0f;
+    state->sample_count = 0;
 }
