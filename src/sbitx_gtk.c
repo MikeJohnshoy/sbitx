@@ -95,6 +95,14 @@ static bool layout_needs_refresh = false;
 static int last_scope_size = -1; // Default to an invalid value initially
 float scope_alpha_plus = 0.0;	 // Default additional scope alpha
 
+// added to support cessb testing, consider removing before release
+int tx_flag=0;
+int pw_ctr=0;
+float pw_avg = 0.0;
+float pw_min = 100.0;
+float pw_max = 0.0;
+// end of cessb testing values
+
 int tune_key=0; // CW tuning
 
 #define AVERAGING_FRAMES 15 // Number of frames to average
@@ -9266,6 +9274,30 @@ gboolean ui_tick(gpointer gook)
 		update_field(f); // move this each time the spectrum watefall index is moved
 		f = get_field("waterfall");
 		update_field(f);
+
+    // DEBUG CODE FOR CESSB
+    //           power measurement for cessb
+        if ( in_tx != 0) {
+            if (tx_flag == 0 ) {  // initialize
+                 tx_flag=1;
+                 pw_ctr=0;
+                 pw_avg=0;
+                 pw_min=100.0;
+                 pw_max=0.0;
+             }
+        //printf(" fwdpower %.2f\n",fwdpower/10.0);
+        pw_ctr++;
+        pw_avg += fwdpower/10.0;
+        if (fwdpower/10.0 < pw_min)    pw_min = fwdpower/10.0;
+        if (fwdpower/10.0 > pw_max) pw_max = fwdpower/10.0;
+    } else {
+        if ( tx_flag == 1) {
+        pw_avg = pw_avg/pw_ctr;
+        printf("count %d: min %.2f  max %.2f  avg %.2f\n", pw_ctr, pw_min, pw_max, pw_avg);
+        }
+        tx_flag=0;
+    }
+    // END OF DEBUG CODE FOR CESSB
 
 		update_titlebar();
 		/*		f = get_field("#status");
