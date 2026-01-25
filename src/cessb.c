@@ -110,6 +110,12 @@ static const float post_lpf_coeffs[POST_LPF_BIQUAD_STAGES][5] = {
 int cessb_enabled = CESSB_DISABLED;
 cessb_state_t cessb_processor;
 
+// Pre-gain applied before processing (allows software drive boost)
+void cessb_set_pre_gain(cessb_state_t *state, float gain) {
+  if (gain < 0.0f) gain = 0.0f;
+  state->pre_gain = gain;
+}
+
 // ============================================================================
 // ATTACK/RELEASE COEFFICIENT CALCULATION
 // ============================================================================
@@ -252,6 +258,7 @@ void cessb_init(cessb_state_t *state, float sample_rate) {
   state->clip_level = CESSB_CLIP_LEVEL;
   state->envelope_limit = CESSB_ENVELOPE_LIMIT;
   state->sample_rate = sample_rate;
+  state->pre_gain = 1.0f;
 
   state->hilbert_index = 0;
   state->delay_index = 0;
@@ -338,8 +345,8 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
   int hilbert_delay_len = (HILBERT_TAPS / 2) + 1;
 
   for (int i = 0; i < num_samples; i++) {
-    // samples already in ±1.0 range, no scaling
-    float sample = samples[i];
+    // samples already in ±1.0 range, apply pre-gain drive
+    float sample = samples[i] * state->pre_gain;
 
     float abs_in = fabsf(sample);
     if (abs_in > state->peak_input) {
@@ -488,5 +495,6 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;
 }
+
 
 
