@@ -41,9 +41,9 @@
 // ============================================================================
 // SIGNAL SCALING
 // ============================================================================
-#define AUDIO_PEAK_LEVEL 0.04f
-#define AUDIO_SCALE_IN (1.0f / AUDIO_PEAK_LEVEL)
-#define AUDIO_SCALE_OUT AUDIO_PEAK_LEVEL
+#define AUDIO_PEAK_LEVEL 1.0f  // we don't scale input or output values
+#define AUDIO_SCALE_IN 1.0f
+#define AUDIO_SCALE_OUT 1.0f
 
 // ============================================================================
 // PRECOMPUTED FILTER COEFFICIENTS
@@ -338,8 +338,8 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
   int hilbert_delay_len = (HILBERT_TAPS / 2) + 1;
 
   for (int i = 0; i < num_samples; i++) {
-    // normalize sample to +/1 1.0
-    float sample = samples[i] * AUDIO_SCALE_IN;
+    // samples already in ±1.0 range, no scaling
+    float sample = samples[i];
 
     float abs_in = fabsf(sample);
     if (abs_in > state->peak_input) {
@@ -383,16 +383,13 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
     // STAGE 4: Second Hilbert envelope detection
     float q2 = apply_fir_filter(hilbert_coeffs, state->hilbert2_delay,
                                 &state->hilbert2_index, HILBERT_TAPS, filtered);
-
     float i2_delayed = get_delayed_sample(state->delay2_line, &state->delay2_index,
                                           hilbert_delay_len, filtered);
-
     float envelope2 = sqrtf(i2_delayed * i2_delayed + q2 * q2);
 
     // STAGE 5: Look-ahead limiter
     float limited = lookahead_limiter_process(&state->lookahead, i2_delayed, envelope2,
                                               state->envelope_limit);
-
     if (state->lookahead.current_gain < state->min_limiter_gain) {
       state->min_limiter_gain = state->lookahead.current_gain;
     }
@@ -400,15 +397,13 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
     // STAGE 6: Post-limiter lowpass filter
     float output = apply_biquad_cascade(post_lpf_coeffs, state->post_lpf_state,
                                         POST_LPF_BIQUAD_STAGES, limited);
-
     float abs_out = fabsf(output);
     if (abs_out > state->peak_output) {
       state->peak_output = abs_out;
     }
     state->average_power_out += output * output;
     state->sample_count++;
-
-    samples[i] = output * AUDIO_SCALE_OUT;
+    samples[i] = output;  // no scaling of output
   }
 }
 
@@ -417,8 +412,9 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
     return;
   }
 
-  const float scale_in = AUDIO_PEAK_LEVEL / 2147483648.0f;
-  const float scale_out = 2147483647.0f / AUDIO_PEAK_LEVEL;
+  // map full-scale int32 to float [-1, 1]
+  const float scale_in = 1.0f / 2147483648.0f;
+  const float scale_out = 2147483647.0f;
 
   float temp_buffer[64];
   int remaining = num_samples;
@@ -492,4 +488,5 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;
 }
+
 
