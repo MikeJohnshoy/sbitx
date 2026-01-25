@@ -258,7 +258,7 @@ void cessb_init(cessb_state_t *state, float sample_rate) {
   state->clip_level = CESSB_CLIP_LEVEL;
   state->envelope_limit = CESSB_ENVELOPE_LIMIT;
   state->sample_rate = sample_rate;
-  state->pre_gain = 1.0f;
+  state->pre_gain = 2.0f;   // this is not an elegant way to set this ...
 
   state->hilbert_index = 0;
   state->delay_index = 0;
@@ -495,6 +495,7 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;
 }
+
 
 
 
