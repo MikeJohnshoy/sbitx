@@ -54,6 +54,7 @@ typedef struct {
     float clip_level;
     float envelope_limit;
     float sample_rate;
+    float pre_gain;
 
     // STAGE 1: Hilbert transform delay lines
     float hilbert_delay[HILBERT_TAPS];
@@ -96,6 +97,7 @@ extern cessb_state_t cessb_processor;
 void cessb_init(cessb_state_t *state, float sample_rate);
 void cessb_set_enabled(cessb_state_t *state, int enabled);
 void cessb_set_clip_level(cessb_state_t *state, float level);
+void cessb_set_pre_gain(cessb_state_t *state, float gain);
 void cessb_set_envelope_limit(cessb_state_t *state, float limit);
 int cessb_is_enabled(cessb_state_t *state);
 
@@ -113,3 +115,4 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
 // Statistics
 void cessb_get_stats(cessb_state_t *state, float *peak_reduction_db, float *avg_power_gain_db);
 void cessb_reset_stats(cessb_state_t *state);
+
