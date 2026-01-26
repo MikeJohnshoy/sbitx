@@ -413,17 +413,17 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
   }
 
   float temp_buffer[1024];  // we get blocks of 1024 samples from sbitx tx_process()
-  // convert int32 to float
+  // convert int32 to float normalized to [-1, 1]
   for (int i = 0; i < num_samples; i++) {
-    temp_buffer[i] = (float)samples[i];
+    temp_buffer[i] = (float)samples[i] / 2147483648.0f;
   }
 
   // run CESSB processing (handles gain staging internally)
   cessb_process(state, temp_buffer, num_samples);
 
-  // convert float back to int32 with clipping
+  // convert float back to int32
   for (int i = 0; i < num_samples; i++) {
-    float out = temp_buffer[i];
+    float out = temp_buffer[i] * 2147483647.0f;
     if (out > 2147483647.0f) {
       out = 2147483647.0f;
     }
@@ -431,7 +431,7 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
       out = -2147483648.0f;
     }
     samples[i] = (int32_t)out;
-  }
+  }  
 
   // Simple periodic stats print
   static unsigned long last_sample_count = 0;
@@ -481,3 +481,4 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   // sample_count intentionally not reset - tracks total samples processed
 }
+
