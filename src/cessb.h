@@ -10,6 +10,7 @@
 // CESSB Parameters
 #define CESSB_PRE_GAIN 30.0f            // allow float values to get up over 1.0f
                                         // (experimentally determined on sBitx)
+#define POST_LPF_MAKEUP 1.35f           // ~+2.6 dB makeup gain to offset filter droop
 #define CESSB_CLIP_LEVEL 1.05f          // hard-clip threshold
 #define CESSB_ENVELOPE_LIMIT 0.90f      // final envelope limit
 #define CESSB_AUDIO_LOW_CUTOFF 300.0f   // audio bandpass low cutoff (Hz)
@@ -116,6 +117,7 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
 // Statistics
 void cessb_get_stats(cessb_state_t *state, float *peak_reduction_db, float *avg_power_gain_db);
 void cessb_reset_stats(cessb_state_t *state);
+
 
 
 
