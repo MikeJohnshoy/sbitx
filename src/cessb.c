@@ -396,11 +396,6 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
     float output = apply_biquad_cascade(post_lpf_coeffs, state->post_lpf_state,
                                         POST_LPF_BIQUAD_STAGES, limited);
 
-    float abs_out = fabsf(output);
-    if (abs_out > state->peak_output) {
-      state->peak_output = abs_out;
-    }
-    state->average_power_out += output * output;
     state->sample_count++;
 
     // remove pre-gain before returning
@@ -490,5 +485,6 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   // sample_count intentionally not reset - tracks total samples processed
 }
+
 
 
