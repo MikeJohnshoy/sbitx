@@ -335,15 +335,16 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
   int hilbert_delay_len = (HILBERT_TAPS / 2) + 1;
 
   for (int i = 0; i < num_samples; i++) {
-    // apply pre-gain to boost small floats to working range (~±1.0)
-    float sample = samples[i] * CESSB_PRE_GAIN;
-
-    float abs_in = fabsf(sample);
+    // measure input BEFORE pre-gain
+    float abs_in = fabsf(samples[i]);
     if (abs_in > state->peak_input) {
       state->peak_input = abs_in;
     }
-    state->average_power_in += sample * sample;
+    state->average_power_in += samples[i] * samples[i];
 
+    // apply pre-gain to boost small floats to working range
+    float sample = samples[i] * CESSB_PRE_GAIN;
+       
     // STAGE 1: Hilbert envelope detection
     float q = apply_fir_filter(hilbert_coeffs, state->hilbert_delay, &state->hilbert_index,
                                HILBERT_TAPS, sample);
@@ -403,7 +404,15 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
     state->sample_count++;
 
     // remove pre-gain before returning
-    samples[i] = output / CESSB_PRE_GAIN;
+    float final_output = output / CESSB_PRE_GAIN;
+
+    // measure output AFTER removing pre-gain
+    float abs_out = fabsf(final_output);
+    if (abs_out > state->peak_output) {
+      state->peak_output = abs_out;
+    }
+    state->average_power_out += final_output * final_output;
+    samples[i] = final_output;
   }
 }
 
@@ -481,4 +490,5 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   // sample_count intentionally not reset - tracks total samples processed
 }
+
 
