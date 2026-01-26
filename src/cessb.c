@@ -21,7 +21,8 @@
 // - Scale to ±0.04 and convert back to integer before
 //   returning processed data to tx_process pipeline
 //
-// Key configuration parameters (see cessb.h):
+// Key configuration parameters (see cessb.h)
+// There are also functions provided to set these if a control panel is needed.
 //
 //   CESSB_PRE_GAIN                Add gain so float values reach +/- 1
 //   CESSB_CLIP_LEVEL              Initial clip threshold (default 0.85)
@@ -274,7 +275,9 @@ void cessb_set_envelope_limit(cessb_state_t *state, float limit) {
   }
 }
 
-int cessb_is_enabled(cessb_state_t *state) { return state->enabled; }
+int cessb_is_enabled(cessb_state_t *state) { 
+     return state->enabled; 
+}
 
 // ============================================================================
 // LOOK-AHEAD LIMITER CONFIGURATION
@@ -432,9 +435,11 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
 
   // Simple periodic stats print
   static unsigned long last_sample_count = 0;
+
   if (state->sample_count - last_sample_count >= 1000000UL) {
     last_sample_count = state->sample_count;
     cessb_debug_print_stats(state);
+    cessb_reset_stats(state);
   }
 }
 
@@ -474,12 +479,5 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->average_power_in = 0.0f;
   state->average_power_out = 0.0f;
   state->min_limiter_gain = 1.0f;
-  state->sample_count = 0;
+  // sample_count intentionally not reset - tracks total samples processed
 }
-
-
-
-
-
-
-
