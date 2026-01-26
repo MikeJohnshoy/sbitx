@@ -332,7 +332,7 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
   int hilbert_delay_len = (HILBERT_TAPS / 2) + 1;
 
   for (int i = 0; i < num_samples; i++) {
-    // samples already in ±1.0 range, apply pre-gain drive
+    // apply pre-gain to boost small floats to working range (~±1.0)
     float sample = samples[i] * CESSB_PRE_GAIN;
 
     float abs_in = fabsf(sample);
@@ -391,13 +391,16 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
     // STAGE 6: Post-limiter lowpass filter
     float output = apply_biquad_cascade(post_lpf_coeffs, state->post_lpf_state,
                                         POST_LPF_BIQUAD_STAGES, limited);
+
     float abs_out = fabsf(output);
     if (abs_out > state->peak_output) {
       state->peak_output = abs_out;
     }
     state->average_power_out += output * output;
     state->sample_count++;
-    samples[i] = output / CESSB_PRE_GAIN;  // scale output down to match input level
+
+    // remove pre-gain before returning
+    samples[i] = output / CESSB_PRE_GAIN;
   }
 }
 
@@ -406,40 +409,29 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
     return;
   }
 
-  // map full-scale int32 to float [-1, 1]
-  const float scale_in  = 1.0f / 2147483648.0f;  // 2^31
-  const float scale_out = 2147483647.0f;         // 2^31 - 1
+  float temp_buffer[1024];  // we get blocks of 1024 samples from sbitx tx_process()
+  // convert int32 to float
+  for (int i = 0; i < num_samples; i++) {
+    temp_buffer[i] = (float)samples[i];
+  }
 
-  float temp_buffer[64];
-  int remaining = num_samples;
-  int offset = 0;
+  // run CESSB processing (handles gain staging internally)
+  cessb_process(state, temp_buffer, num_samples);
 
-  while (remaining > 0) {
-    int block_size = (remaining > 64) ? 64 : remaining;
-
-    // convert int32_t audio sample to float [-1, 1]
-    for (int j = 0; j < block_size; j++) {
-      temp_buffer[j] = (float)samples[offset + j] * scale_in;
+  // convert float back to int32 with clipping
+  for (int i = 0; i < num_samples; i++) {
+    float out = temp_buffer[i];
+    if (out > 2147483647.0f) {
+      out = 2147483647.0f;
     }
-
-    // run CESSB processing in normalized float domain
-    cessb_process(state, temp_buffer, block_size);
-
-    // convert back to int32
-    for (int j = 0; j < block_size; j++) {
-      float out = temp_buffer[j] * scale_out;
-      if (out > 2147483647.0f) out = 2147483647.0f;
-      if (out < -2147483648.0f) out = -2147483648.0f;
-      samples[offset + j] = (int32_t)out;
+    if (out < -2147483648.0f) {
+      out = -2147483648.0f;
     }
-
-    offset    += block_size;
-    remaining -= block_size;
+    samples[i] = (int32_t)out;
   }
 
   // Simple periodic stats print
   static unsigned long last_sample_count = 0;
-
   if (state->sample_count - last_sample_count >= 1000000UL) {
     last_sample_count = state->sample_count;
     cessb_debug_print_stats(state);
@@ -484,6 +476,7 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;
 }
+
 
 
 
