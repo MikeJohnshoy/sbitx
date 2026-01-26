@@ -441,10 +441,9 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
   // Simple periodic stats print
   static unsigned long last_sample_count = 0;
 
-  if (state->sample_count - last_sample_count >= 100000UL) {  // ~1 second at 96kHz
-    last_sample_count = state->sample_count;
+  if (state->sample_count >= 100000UL) {           // ~1 second at 96 kHz
     cessb_debug_print_stats(state);
-    cessb_reset_stats(state);
+    cessb_reset_stats(state);                      // also resets sample_count
   }
 }
 
@@ -484,6 +483,5 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->average_power_in = 0.0f;
   state->average_power_out = 0.0f;
   state->min_limiter_gain = 1.0f;
-  // sample_count intentionally not reset - tracks total samples processed
+  state->sample_count = 0;  // reset window sample count so averages use the same window
 }
-
