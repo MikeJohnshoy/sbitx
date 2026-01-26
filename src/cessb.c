@@ -40,6 +40,8 @@
 
 #include "cessb.h"
 
+#define POST_LPF_MAKEUP 1.35f  // ~+2.6 dB to offset filter droop
+
 // ============================================================================
 // PRECOMPUTED FILTER COEFFICIENTS
 // Generated for: 96000 Hz sample rate, 3000 Hz audio cutoff
@@ -396,7 +398,7 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
     // STAGE 6: Post-limiter lowpass filter
     float output = apply_biquad_cascade(post_lpf_coeffs, state->post_lpf_state,
                                         POST_LPF_BIQUAD_STAGES, limited);
-
+    output *= POST_LPF_MAKEUP;
     state->sample_count++;
 
     // remove pre-gain before returning
@@ -485,3 +487,4 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
+
