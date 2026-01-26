@@ -2661,13 +2661,14 @@ void sdr_request(char *request, char *response)
 		}
 	}
 	else if (!strcasecmp(cmd, "cessb_stats"))
-	{
-		// Get CESSB processing statistics
-		// Usage: cessb_stats=get
-		float peak_reduction, avg_gain;
-		cessb_get_stats(&cessb_processor, &peak_reduction, &avg_gain);
-		sprintf(response, "ok peak_reduction=%.1fdB avg_gain=%.1fdB", peak_reduction, avg_gain);
-	}
+  {
+    // Get CESSB processing statistics
+    // Usage: cessb_stats=get
+    float peak_reduction, avg_gain, talk_power;
+    cessb_get_stats(&cessb_processor, &peak_reduction, &avg_gain, &talk_power);
+    sprintf(response, "ok peak_reduction=%.1fdB avg_gain=%.1fdB talk_power=%.1fdB",
+            peak_reduction, avg_gain, talk_power);
+  }
 	else if (!strcasecmp(cmd, "cessb_reset"))
 	{
 		// Reset CESSB statistics
