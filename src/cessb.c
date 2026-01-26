@@ -314,7 +314,8 @@ void cessb_debug_print_stats(cessb_state_t *state) {
 
   printf("CESSB stats:\n");
   printf("  samples processed      : %ld\n", (long)state->sample_count);
-  printf("  peak in (pre)          : %8.4f\n", state->peak_input);
+  printf("  peak in (raw)          : %8.4f\n", state->peak_input);
+  printf("  peak in (boosted)      : %8.4f\n", state->peak_input * CESSB_PRE_GAIN);
   printf("  peak after clip        : %8.4f\n", state->peak_after_clip);
   printf("  peak after overshoot   : %8.4f\n", state->peak_after_overshoot);
   printf("  peak out (post)        : %8.4f\n", state->peak_output);
@@ -485,6 +486,3 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   // sample_count intentionally not reset - tracks total samples processed
 }
-
-
-
