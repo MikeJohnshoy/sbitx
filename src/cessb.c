@@ -23,6 +23,7 @@
 //
 // Key configuration parameters (see cessb.h):
 //
+//   CESSB_PRE_GAIN                Add gain so float values reach +/- 1
 //   CESSB_CLIP_LEVEL              Initial clip threshold (default 0.85)
 //   CESSB_ENVELOPE_LIMIT          Final limiter ceiling (default 1.0)
 //   LOOKAHEAD_DEFAULT_SAMPLES     Default look-ahead (~2 ms at 96 kHz)
@@ -37,13 +38,6 @@
 #include <string.h>
 
 #include "cessb.h"
-
-// ============================================================================
-// SIGNAL SCALING
-// ============================================================================
-#define AUDIO_PEAK_LEVEL 1.0f  // we don't scale input or output values
-#define AUDIO_SCALE_IN 1.0f
-#define AUDIO_SCALE_OUT 1.0f
 
 // ============================================================================
 // PRECOMPUTED FILTER COEFFICIENTS
@@ -258,7 +252,6 @@ void cessb_init(cessb_state_t *state, float sample_rate) {
   state->clip_level = CESSB_CLIP_LEVEL;
   state->envelope_limit = CESSB_ENVELOPE_LIMIT;
   state->sample_rate = sample_rate;
-  state->pre_gain = 2.0f;   // this is not an elegant way to set this ...
 
   state->hilbert_index = 0;
   state->delay_index = 0;
@@ -346,7 +339,7 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
 
   for (int i = 0; i < num_samples; i++) {
     // samples already in ±1.0 range, apply pre-gain drive
-    float sample = samples[i] * state->pre_gain;
+    float sample = samples[i] * CESSB_PRE_GAIN
 
     float abs_in = fabsf(sample);
     if (abs_in > state->peak_input) {
@@ -410,7 +403,7 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
     }
     state->average_power_out += output * output;
     state->sample_count++;
-    samples[i] = output;  // no scaling of output
+    samples[i] = output / CESSB_PRE_GAIN;  // scale output down to match input level
   }
 }
 
@@ -432,13 +425,13 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
 
     // convert int32_t audio sample to float
     for (int j = 0; j < block_size; j++) {
-      temp_buffer[j] = (float)samples[offset + j] * scale_in;
+      temp_buffer[j] = (float)samples[offset + j];
     }
 
     cessb_process(state, temp_buffer, block_size);
 
     for (int j = 0; j < block_size; j++) {
-      float out = temp_buffer[j] * scale_out;
+      float out = temp_buffer[j];
       if (out > 2147483647.0f) out = 2147483647.0f;
       if (out < -2147483648.0f) out = -2147483648.0f;
       samples[offset + j] = (int32_t)out;
@@ -495,6 +488,7 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;
 }
+
 
 
 
