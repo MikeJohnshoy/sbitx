@@ -11,7 +11,7 @@
 #define CESSB_PRE_GAIN 20.0f            // allow float values to get up over 1.0f
                                         // (experimentally determined on sBitx)
 #define CESSB_CLIP_LEVEL 0.85f          // hard-clip threshold
-#define CESSB_ENVELOPE_LIMIT 0.80f       // final envelope limit
+#define CESSB_ENVELOPE_LIMIT 0.90f      // final envelope limit
 #define CESSB_AUDIO_LOW_CUTOFF 300.0f   // audio bandpass low cutoff (Hz)
 #define CESSB_AUDIO_HIGH_CUTOFF 3000.0f // audio bandpass high cutoff (Hz)
 #define CESSB_SAMPLE_RATE 96000.0f      // audio sample rate
@@ -116,6 +116,7 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
 // Statistics
 void cessb_get_stats(cessb_state_t *state, float *peak_reduction_db, float *avg_power_gain_db);
 void cessb_reset_stats(cessb_state_t *state);
+
 
 
 
