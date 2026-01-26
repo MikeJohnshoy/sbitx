@@ -311,19 +311,21 @@ int cessb_get_lookahead_samples(cessb_state_t *state) {
 void cessb_debug_print_stats(cessb_state_t *state) {
   float peak_reduction_db = 0.0f;
   float avg_power_gain_db = 0.0f;
+  float talk_power_db = 0.0f;
 
-  cessb_get_stats(state, &peak_reduction_db, &avg_power_gain_db);
+  cessb_get_stats(state, &peak_reduction_db, &avg_power_gain_db, &talk_power_db);
 
   printf("CESSB stats:\n");
-  //printf("  samples processed      : %ld\n", (long)state->sample_count);
+  printf("  samples processed      : %ld\n", (long)state->sample_count);
   printf("  peak in (raw)          : %8.4f\n", state->peak_input);
   printf("  peak in (boosted)      : %8.4f\n", state->peak_input * CESSB_PRE_GAIN);
   printf("  peak after clip        : %8.4f\n", state->peak_after_clip);
   printf("  peak after overshoot   : %8.4f\n", state->peak_after_overshoot);
   printf("  peak out (post)        : %8.4f\n", state->peak_output);
   printf("  min limiter gain       : %8.4f\n", state->min_limiter_gain);
-  //printf("  peak reduction (dB)    : %8.2f dB\n", peak_reduction_db);
-  //printf("  avg power gain (dB)    : %8.2f dB\n", avg_power_gain_db);
+  printf("  peak reduction (dB)    : %8.2f dB\n", peak_reduction_db);
+  printf("  avg power gain (dB)    : %8.2f dB\n", avg_power_gain_db);
+  printf("  avg power @ equal PEP  : %8.2f dB\n", talk_power_db);
 }
 
 // ============================================================================
@@ -454,29 +456,40 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
 // ============================================================================
 
 void cessb_get_stats(cessb_state_t *state, float *peak_reduction_db,
-                     float *avg_power_gain_db) {
+                     float *avg_power_gain_db, float *talk_power_db) {
   if (state->sample_count == 0) {
     *peak_reduction_db = 0.0f;
     *avg_power_gain_db = 0.0f;
+    *talk_power_db = 0.0f;
     return;
   }
 
+  // Peak reduction (simple ratio of peaks)
   if (state->peak_input > 1e-10f && state->peak_output > 1e-10f) {
     *peak_reduction_db = 20.0f * log10f(state->peak_output / state->peak_input);
   } else {
     *peak_reduction_db = 0.0f;
   }
 
-  float avg_power_in = state->average_power_in / state->sample_count;
-  float avg_power_out = state->average_power_out / state->sample_count;
-
-  if (avg_power_in > 1e-10f && avg_power_out > 1e-10f) {
-    *avg_power_gain_db = 10.0f * log10f(avg_power_out / avg_power_in);
+  // Unnormalized average power gain
+  float avg_in  = state->average_power_in  / state->sample_count;
+  float avg_out = state->average_power_out / state->sample_count;
+  if (avg_in > 1e-10f && avg_out > 1e-10f) {
+    *avg_power_gain_db = 10.0f * log10f(avg_out / avg_in);
   } else {
     *avg_power_gain_db = 0.0f;
   }
-}
 
+  // Talk power @ equal PEP: normalize processed peak to match input peak
+  if (avg_in > 1e-10f && avg_out > 1e-10f &&
+      state->peak_input > 1e-10f && state->peak_output > 1e-10f) {
+    float peak_norm = state->peak_input / state->peak_output;      // gain to equalize PEP
+    float scaled_out = avg_out * peak_norm * peak_norm;            // power scales with gain^2
+    *talk_power_db = 10.0f * log10f(scaled_out / avg_in);
+  } else {
+    *talk_power_db = 0.0f;
+  }
+}
 void cessb_reset_stats(cessb_state_t *state) {
   state->peak_input = 0.0f;
   state->peak_output = 0.0f;
@@ -487,5 +500,6 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
+
 
 
