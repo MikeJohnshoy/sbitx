@@ -104,12 +104,6 @@ static const float post_lpf_coeffs[POST_LPF_BIQUAD_STAGES][5] = {
 int cessb_enabled = CESSB_DISABLED;
 cessb_state_t cessb_processor;
 
-// Pre-gain applied before processing (allows software drive boost)
-void cessb_set_pre_gain(cessb_state_t *state, float gain) {
-  if (gain < 0.0f) gain = 0.0f;
-  state->pre_gain = gain;
-}
-
 // ============================================================================
 // ATTACK/RELEASE COEFFICIENT CALCULATION
 // ============================================================================
@@ -339,7 +333,7 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
 
   for (int i = 0; i < num_samples; i++) {
     // samples already in ±1.0 range, apply pre-gain drive
-    float sample = samples[i] * CESSB_PRE_GAIN
+    float sample = samples[i] * CESSB_PRE_GAIN;
 
     float abs_in = fabsf(sample);
     if (abs_in > state->peak_input) {
@@ -413,8 +407,8 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
   }
 
   // map full-scale int32 to float [-1, 1]
-  const float scale_in = 1.0f / 2147483648.0f;
-  const float scale_out = 2147483647.0f;
+  const float scale_in  = 1.0f / 2147483648.0f;  // 2^31
+  const float scale_out = 2147483647.0f;         // 2^31 - 1
 
   float temp_buffer[64];
   int remaining = num_samples;
@@ -423,21 +417,23 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
   while (remaining > 0) {
     int block_size = (remaining > 64) ? 64 : remaining;
 
-    // convert int32_t audio sample to float
+    // convert int32_t audio sample to float [-1, 1]
     for (int j = 0; j < block_size; j++) {
-      temp_buffer[j] = (float)samples[offset + j];
+      temp_buffer[j] = (float)samples[offset + j] * scale_in;
     }
 
+    // run CESSB processing in normalized float domain
     cessb_process(state, temp_buffer, block_size);
 
+    // convert back to int32
     for (int j = 0; j < block_size; j++) {
-      float out = temp_buffer[j];
+      float out = temp_buffer[j] * scale_out;
       if (out > 2147483647.0f) out = 2147483647.0f;
       if (out < -2147483648.0f) out = -2147483648.0f;
       samples[offset + j] = (int32_t)out;
     }
 
-    offset += block_size;
+    offset    += block_size;
     remaining -= block_size;
   }
 
@@ -488,6 +484,7 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;
 }
+
 
 
 
