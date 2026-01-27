@@ -42,8 +42,6 @@
 
 #include "cessb.h"
 
-#define POST_LPF_MAKEUP 1.35f  // ~+2.6 dB to offset filter droop
-
 // ============================================================================
 // PRECOMPUTED FILTER COEFFICIENTS
 // Generated for: 96000 Hz sample rate, 3000 Hz audio cutoff
