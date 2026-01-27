@@ -262,6 +262,10 @@ void cessb_init(cessb_state_t *state, float sample_rate) {
   cessb_reset_stats(state);
 }
 
+// ============================================================================
+// EXTERNAL CONTROL API (for integration convenience)
+// ============================================================================
+
 void cessb_set_enabled(cessb_state_t *state, int enabled) {
   state->enabled = enabled;
   cessb_enabled = enabled;
@@ -279,14 +283,6 @@ void cessb_set_envelope_limit(cessb_state_t *state, float limit) {
   }
 }
 
-int cessb_is_enabled(cessb_state_t *state) { 
-     return state->enabled; 
-}
-
-// ============================================================================
-// LOOK-AHEAD LIMITER CONFIGURATION
-// ============================================================================
-
 void cessb_set_lookahead_samples(cessb_state_t *state, int samples) {
   if (samples < 1) samples = 1;
   if (samples > LOOKAHEAD_MAX_SAMPLES) samples = LOOKAHEAD_MAX_SAMPLES;
@@ -294,6 +290,7 @@ void cessb_set_lookahead_samples(cessb_state_t *state, int samples) {
 }
 
 void cessb_set_lookahead_ms(cessb_state_t *state, float milliseconds) {
+  // note this is the same as cessb_set_lookahead_samples but with input in ms
   int samples = (int)((milliseconds / 1000.0f) * state->sample_rate + 0.5f);
   cessb_set_lookahead_samples(state, samples);
 }
@@ -310,6 +307,11 @@ int cessb_get_lookahead_samples(cessb_state_t *state) {
   return state->lookahead.lookahead_samples;
 }
 
+int cessb_is_enabled(cessb_state_t *state) { 
+     return state->enabled; 
+}
+
+// used internally in development, but left here for future use
 void cessb_debug_print_stats(cessb_state_t *state) {
   float peak_reduction_db = 0.0f;
   float avg_power_gain_db = 0.0f;
@@ -502,7 +504,3 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
-
-
-
-
