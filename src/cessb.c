@@ -19,8 +19,8 @@
 //   with smooth attack/release, ceiling set by envelope_limit
 // - Post-limiter 6th-order (3 biquad) Butterworth LPF @ 3 kHz,
 //   followed by a filter-loss makeup gain of 1.35x
-// - Remove the initial pre-gain (divide by CESSB_PRE_GAIN) before returning to the caller
-// - Convert float back to int32 with saturation before returning processed data
+// - Remove the initial pre-gain (divide by CESSB_PRE_GAIN)
+// - Convert float back to int32 before returning processed data
 // - Statistics (peaks/power) are accumulated and optionally printed periodically
 //
 // Key configuration parameters (see cessb.h)
@@ -502,3 +502,4 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
+
