@@ -8,18 +8,20 @@
 // normally occurs when clipped audio is filtered.
 //
 // Processing chain:
-// - Input audio samples (integers), converted to float (±0.04)
-// - Normalize to ±1.0
-// - Hilbert transform (127 taps)
-// - Hard clip (envelope-based) to CESSB_CLIP_LEVEL
-// - Overshoot-control Blackman–Harris-windowed LPF @ 3 kHz prevents overshoot regeneration
-// - Hilbert transform to re-measure envelope after filtering
-// - Look-ahead final envelope limiting with configurable look-ahead (up to 1024 samples)
-//   and smooth attack/release gain control
-// - Post-limiter LPF: 6th-order Butterworth @ 3 kHz
-//   Removes residual out-of-band content
-// - Scale to ±0.04 and convert back to integer before
-//   returning processed data to tx_process pipeline
+// - Input audio arrives as int, converted to float
+// - Apply CESSB_PRE_GAIN to bring the working level up
+// - Hilbert transform (127 taps) to measure the instantaneous envelope
+// - Envelope-based hard clip at CESSB_CLIP_LEVEL
+// - Overshoot-control FIR LPF (65 taps, Blackman–Harris window, ~3 kHz)
+//   to prevent overshoot regeneration
+// - Second Hilbert transform (127 taps) to re-measure the envelope after filtering
+// - Look-ahead limiter (configurable lookahead up to 1024 samples) 
+//   with smooth attack/release, ceiling set by envelope_limit
+// - Post-limiter 6th-order (3 biquad) Butterworth LPF @ 3 kHz,
+//   followed by a filter-loss makeup gain of 1.35x
+// - Remove the initial pre-gain (divide by CESSB_PRE_GAIN) before returning to the caller
+// - Convert float back to int32 with saturation before returning processed data
+// - Statistics (peaks/power) are accumulated and optionally printed periodically
 //
 // Key configuration parameters (see cessb.h)
 // There are also functions provided to set these if a control panel is needed.
@@ -500,6 +502,7 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
+
 
 
 
