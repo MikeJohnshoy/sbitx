@@ -402,7 +402,7 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
     // STAGE 6: Post-limiter lowpass filter
     float output = apply_biquad_cascade(post_lpf_coeffs, state->post_lpf_state,
                                         POST_LPF_BIQUAD_STAGES, limited);
-    output *= POST_LPF_MAKEUP;
+    //output *= POST_LPF_MAKEUP;  // I don't want to do this anymore
     state->sample_count++;
 
     // remove pre-gain before returning
@@ -526,6 +526,7 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
+
 
 
 
