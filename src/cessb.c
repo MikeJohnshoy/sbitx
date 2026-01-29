@@ -318,15 +318,15 @@ void cessb_debug_print_stats(cessb_state_t *state) {
   cessb_get_stats(state, &peak_reduction_db, &avg_power_gain_db, &talk_power_db);
 
   printf("CESSB stats:\n");
-  printf("  samples processed      : %ld\n", (long)state->sample_count);
+  //printf("  samples processed      : %ld\n", (long)state->sample_count);
   printf("  peak in (raw)          : %8.4f\n", state->peak_input);
   printf("  peak in (boosted)      : %8.4f\n", state->peak_input * CESSB_PRE_GAIN);
-  printf("  peak after clip        : %8.4f\n", state->peak_after_clip);
-  printf("  peak after overshoot   : %8.4f\n", state->peak_after_overshoot);
-  printf("  peak out (post)        : %8.4f\n", state->peak_output);
-  printf("  min limiter gain       : %8.4f\n", state->min_limiter_gain);
+  //printf("  peak after clip        : %8.4f\n", state->peak_after_clip);
+  //printf("  peak after overshoot   : %8.4f\n", state->peak_after_overshoot);
+  //printf("  peak out (post)        : %8.4f\n", state->peak_output);
+  //printf("  min limiter gain       : %8.4f\n", state->min_limiter_gain);
   printf("  peak reduction (dB)    : %8.2f dB\n", peak_reduction_db);
-  printf("  avg power gain (dB)    : %8.2f dB\n", avg_power_gain_db);
+  //printf("  avg power gain (dB)    : %8.2f dB\n", avg_power_gain_db);
   printf("  avg power @ equal PEP  : %8.2f dB\n", talk_power_db);
 }
 
@@ -526,5 +526,6 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
+
 
 
