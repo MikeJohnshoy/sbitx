@@ -424,13 +424,38 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
   }
 
   float temp_buffer[1024];  // we get blocks of 1024 samples from sbitx tx_process()
-  // convert int32 to float normalized to [-1, 1]
+
+  // convert int32 to float normalized to [-1, 1] and find peak_in
+  float peak_in = 0.0f;
   for (int i = 0; i < num_samples; i++) {
-    temp_buffer[i] = (float)samples[i] / 2147483648.0f;
+    float s = (float)samples[i] / 2147483648.0f;
+    temp_buffer[i] = s;
+    float abs_s = fabsf(s);
+    if (abs_s > peak_in) {
+      peak_in = abs_s;
+    }
   }
 
   // run CESSB processing (handles gain staging internally)
   cessb_process(state, temp_buffer, num_samples);
+
+  // find peak_out after CESSB processing
+  float peak_out = 0.0f;
+  for (int i = 0; i < num_samples; i++) {
+    float abs_s = fabsf(temp_buffer[i]);
+    if (abs_s > peak_out) {
+      peak_out = abs_s;
+    }
+  }
+
+  // normalize block so its peak matches the original block peak
+  // (only if both peaks are non‑zero to avoid division by zero)
+  if (peak_in > 0.0f && peak_out > 0.0f) {
+    float block_gain = peak_in / peak_out;
+    for (int i = 0; i < num_samples; i++) {
+      temp_buffer[i] *= block_gain;
+    }
+  }
 
   // convert float back to int32
   for (int i = 0; i < num_samples; i++) {
@@ -452,7 +477,6 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
     cessb_reset_stats(state);                      // also resets sample_count
   }
 }
-
 // ============================================================================
 // STATISTICS
 // ============================================================================
@@ -502,4 +526,5 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
+
 
