@@ -423,38 +423,6 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
     return;
   }
 
-  // Static counters and file pointers for saving blocks (persistent across function calls)
-  static int block_count = 0;
-  static FILE *f_input = NULL;
-  static FILE *f_output = NULL;
-
-  // Open files if not already open and we haven't reached 400 blocks
-  if (block_count < 400) {
-    if (!f_input) {
-      f_input = fopen("audio_input", "ab");  // Append binary mode
-      if (!f_input) {
-        fprintf(stderr, "Error: Could not open audio_input for writing\n");
-        return;  // Skip processing if file can't be opened
-      }
-    }
-    if (!f_output) {
-      f_output = fopen("audio_output", "ab");  // Append binary mode
-      if (!f_output) {
-        fprintf(stderr, "Error: Could not open audio_output for writing\n");
-        if (f_input) fclose(f_input);  // Clean up
-        return;
-      }
-    }
-  }
-
-  // Save input samples (original int32_t data) if within 400 blocks
-  if (block_count < 400) {
-    size_t written = fwrite(samples, sizeof(int32_t), num_samples, f_input);
-    if (written != (size_t)num_samples) {
-      fprintf(stderr, "Warning: Incomplete write to audio_input (wrote %zu of %d samples)\n", written, num_samples);
-    }
-  }
-
   float temp_buffer[1024];  // we get blocks of 1024 samples from sbitx tx_process()
 
   // convert int32 to float normalized to [-1, 1] and find peak_in
@@ -501,32 +469,14 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
     samples[i] = (int32_t)out;
   }  
 
-  // Save normalized output samples (final int32_t data) if within 400 blocks
-  if (block_count < 400) {
-    size_t written = fwrite(samples, sizeof(int32_t), num_samples, f_output);
-    if (written != (size_t)num_samples) {
-      fprintf(stderr, "Warning: Incomplete write to audio_output (wrote %zu of %d samples)\n", written, num_samples);
-    }
-    block_count++;  // Increment after both writes
-
-    // Close files after 400 blocks to free resources
-    if (block_count >= 400) {
-      if (f_input) fclose(f_input);
-      if (f_output) fclose(f_output);
-      f_input = NULL;
-      f_output = NULL;
-    }
-  }
-
   // Simple periodic stats print
   //static unsigned long last_sample_count = 0;
 
   //if (state->sample_count >= 100000UL) {           // ~1 second at 96 kHz
   //  cessb_debug_print_stats(state);
-  //  cessb_reset_stats(state);                      // Reset also resets sample_count
+  //  cessb_reset_stats(state);                      // also resets sample_count
   //}
 }
-
 // ============================================================================
 // STATISTICS
 // ============================================================================
@@ -577,5 +527,3 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
-
-
