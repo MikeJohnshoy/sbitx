@@ -12,8 +12,6 @@
                                         // (experimentally determined on sBitx)
 #define CESSB_CLIP_LEVEL 0.85f          // hard-clip threshold
 #define CESSB_ENVELOPE_LIMIT 1.00f      // final envelope limit
-#define CESSB_AUDIO_LOW_CUTOFF 300.0f   // audio bandpass low cutoff (Hz)
-#define CESSB_AUDIO_HIGH_CUTOFF 3000.0f // audio bandpass high cutoff (Hz)
 #define CESSB_SAMPLE_RATE 96000.0f      // audio sample rate
 
 // Hilbert transform filter length (must be odd)
@@ -119,27 +117,3 @@ void cessb_get_stats(cessb_state_t *state,
                      float *avg_power_gain_db,
                      float *talk_power_db);
 void cessb_reset_stats(cessb_state_t *state);
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
