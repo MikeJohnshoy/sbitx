@@ -3,7 +3,7 @@
 // Reference: "Controlled Envelope Single Sideband" by David Hershberger, W9GR
 //            QEX November/December 2014
 //
-// Concept: CESSB increases average SSB transmit power by ~2–3 dB without increasing peak
+// Concept: CESSB increases average SSB transmit power without increasing peak
 // envelope power (PEP). This is achieved by controlling envelope overshoot that
 // normally occurs when clipped audio is filtered.
 //
@@ -14,7 +14,7 @@
 // - Envelope-based hard clip at CESSB_CLIP_LEVEL
 // - Overshoot-control FIR LPF (65 taps, Blackman–Harris window, ~3 kHz)
 //   to prevent overshoot regeneration
-// - Second Hilbert transform (127 taps) to re-measure the envelope after filtering
+// - Second Hilbert transform to re-measure the envelope after filtering
 // - Look-ahead limiter (configurable lookahead up to 1024 samples) 
 //   with smooth attack/release, ceiling set by envelope_limit
 // - Post-limiter 6th-order (3 biquad) Butterworth LPF @ 3 kHz
@@ -318,15 +318,15 @@ void cessb_debug_print_stats(cessb_state_t *state) {
   cessb_get_stats(state, &peak_reduction_db, &avg_power_gain_db, &talk_power_db);
 
   printf("CESSB stats:\n");
-  //printf("  samples processed      : %ld\n", (long)state->sample_count);
+  printf("  samples processed      : %ld\n", (long)state->sample_count);
   printf("  peak in (raw)          : %8.4f\n", state->peak_input);
   printf("  peak in (boosted)      : %8.4f\n", state->peak_input * CESSB_PRE_GAIN);
-  //printf("  peak after clip        : %8.4f\n", state->peak_after_clip);
-  //printf("  peak after overshoot   : %8.4f\n", state->peak_after_overshoot);
-  //printf("  peak out (post)        : %8.4f\n", state->peak_output);
-  //printf("  min limiter gain       : %8.4f\n", state->min_limiter_gain);
+  printf("  peak after clip        : %8.4f\n", state->peak_after_clip);
+  printf("  peak after overshoot   : %8.4f\n", state->peak_after_overshoot);
+  printf("  peak out (post)        : %8.4f\n", state->peak_output);
+  printf("  min limiter gain       : %8.4f\n", state->min_limiter_gain);
   printf("  peak reduction (dB)    : %8.2f dB\n", peak_reduction_db);
-  //printf("  avg power gain (dB)    : %8.2f dB\n", avg_power_gain_db);
+  printf("  avg power gain (dB)    : %8.2f dB\n", avg_power_gain_db);
   printf("  avg power @ equal PEP  : %8.2f dB\n", talk_power_db);
 }
 
@@ -470,17 +470,18 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
   }  
 
   // Simple periodic stats print
-  static unsigned long last_sample_count = 0;
+  //static unsigned long last_sample_count = 0;
 
-  if (state->sample_count >= 100000UL) {           // ~1 second at 96 kHz
-    cessb_debug_print_stats(state);
-    cessb_reset_stats(state);                      // also resets sample_count
-  }
+  //if (state->sample_count >= 100000UL) {           // ~1 second at 96 kHz
+  //  cessb_debug_print_stats(state);
+  //  cessb_reset_stats(state);                      // also resets sample_count
+  //}
 }
 // ============================================================================
 // STATISTICS
 // ============================================================================
 
+// used for debug, may be useful in future user interface
 void cessb_get_stats(cessb_state_t *state, float *peak_reduction_db,
                      float *avg_power_gain_db, float *talk_power_db) {
   if (state->sample_count == 0) {
@@ -526,8 +527,4 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
-
-
-
-
 
