@@ -179,8 +179,11 @@ static float apply_biquad_cascade(const float coeffs[][5], biquad_state_t *state
 // LOOK-AHEAD LIMITER
 // ============================================================================
 
-static void lookahead_limiter_init(lookahead_limiter_t *lim, float sample_rate) {
-  memset(lim->delay, 0, sizeof(lim->delay));
+/* Vector lookahead limiter: stores both I and Q delays and applies same gain to both */
+static void lookahead_limiter_init_vec(lookahead_limiter_t *lim, float sample_rate) {
+  /* zero both channel delays */
+  memset(lim->delay_i, 0, sizeof(lim->delay_i));
+  memset(lim->delay_q, 0, sizeof(lim->delay_q));
   memset(lim->envelope, 0, sizeof(lim->envelope));
   lim->write_index = 0;
   lim->lookahead_samples = LOOKAHEAD_DEFAULT_SAMPLES;
@@ -191,30 +194,31 @@ static void lookahead_limiter_init(lookahead_limiter_t *lim, float sample_rate) 
   lim->release_coeff = time_constant_to_coeff(LOOKAHEAD_DEFAULT_RELEASE_MS, sample_rate);
 }
 
-static float find_peak_in_window(lookahead_limiter_t *lim) {
+/* helper: search peak in window is unchanged and can be reused */
+static float find_peak_in_window_vec(lookahead_limiter_t *lim) {
   float peak = 0.0f;
   int read_index = lim->write_index;
-
   for (int i = 0; i < lim->lookahead_samples; i++) {
-    if (lim->envelope[read_index] > peak) {
-      peak = lim->envelope[read_index];
-    }
+    if (lim->envelope[read_index] > peak) peak = lim->envelope[read_index];
     read_index++;
     if (read_index >= LOOKAHEAD_MAX_SAMPLES) read_index = 0;
   }
-
   return peak;
 }
 
-static float lookahead_limiter_process(lookahead_limiter_t *lim, float input,
-                                       float envelope, float limit) {
-  lim->delay[lim->write_index] = input;
+/* process both I and Q; out_i/out_q are the delayed, gain-applied outputs */
+static void lookahead_limiter_process_vec(lookahead_limiter_t *lim,
+                                          float input_i, float input_q, float envelope, float limit,
+                                          float *out_i, float *out_q) {
+  /* store both channels + envelope at current write index */
+  lim->delay_i[lim->write_index] = input_i;
+  lim->delay_q[lim->write_index] = input_q;
   lim->envelope[lim->write_index] = envelope;
 
   int read_index = lim->write_index - lim->lookahead_samples;
   if (read_index < 0) read_index += LOOKAHEAD_MAX_SAMPLES;
 
-  float peak_envelope = find_peak_in_window(lim);
+  float peak_envelope = find_peak_in_window_vec(lim);
 
   float target_gain = 1.0f;
   if (peak_envelope > limit && peak_envelope > 1e-10f) {
@@ -230,12 +234,12 @@ static float lookahead_limiter_process(lookahead_limiter_t *lim, float input,
   if (lim->current_gain < 0.0f) lim->current_gain = 0.0f;
   if (lim->current_gain > 1.0f) lim->current_gain = 1.0f;
 
-  float output = lim->delay[read_index] * lim->current_gain;
+  /* apply same gain to the delayed I and Q */
+  *out_i = lim->delay_i[read_index] * lim->current_gain;
+  *out_q = lim->delay_q[read_index] * lim->current_gain;
 
   lim->write_index++;
   if (lim->write_index >= LOOKAHEAD_MAX_SAMPLES) lim->write_index = 0;
-
-  return output;
 }
 
 // ============================================================================
@@ -351,10 +355,10 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
 
     // apply pre-gain to boost small floats to working range
     float sample = samples[i] * CESSB_PRE_GAIN;
-       
+
     // STAGE 1: Hilbert envelope detection
-    float q = apply_fir_filter(hilbert_coeffs, state->hilbert_delay, &state->hilbert_index,
-                               HILBERT_TAPS, sample);
+    float q = apply_fir_filter(hilbert_coeffs, state->hilbert_delay,
+                               &state->hilbert_index, HILBERT_TAPS, sample);
 
     float i_delayed = get_delayed_sample(state->delay_line, &state->delay_index,
                                          hilbert_delay_len, sample);
@@ -379,10 +383,12 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
     }
 
     // STAGE 3: Overshoot control filter — operate on both I and Q
-    float filtered_i = apply_fir_filter(overshoot_coeffs, state->overshoot_i_delay,
-                                    &state->overshoot_i_index, OVERSHOOT_FILTER_TAPS, clipped_i);
-    float filtered_q = apply_fir_filter(overshoot_coeffs, state->overshoot_q_delay,
-                                    &state->overshoot_q_index, OVERSHOOT_FILTER_TAPS, clipped_q);
+    float filtered_i =
+        apply_fir_filter(overshoot_coeffs, state->overshoot_i_delay,
+                         &state->overshoot_i_index, OVERSHOOT_FILTER_TAPS, clipped_i);
+    float filtered_q =
+        apply_fir_filter(overshoot_coeffs, state->overshoot_q_delay,
+                         &state->overshoot_q_index, OVERSHOOT_FILTER_TAPS, clipped_q);
 
     // peak after overshoot is magnitude of complex sample
     float abs_filt = sqrtf(filtered_i * filtered_i + filtered_q * filtered_q);
@@ -390,26 +396,28 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
       state->peak_after_overshoot = abs_filt;
     }
 
-    // STAGE 4: Second envelope detection — use delayed I and Q (keep same delay length)
+    // STAGE 4: Second envelope detection — use delayed I and Q
     float i2_delayed = get_delayed_sample(state->delay2_i, &state->delay2_i_index,
-                                      hilbert_delay_len, filtered_i);
+                                          hilbert_delay_len, filtered_i);
     float q2_delayed = get_delayed_sample(state->delay2_q, &state->delay2_q_index,
-                                      hilbert_delay_len, filtered_q);
+                                          hilbert_delay_len, filtered_q);
     float envelope2 = sqrtf(i2_delayed * i2_delayed + q2_delayed * q2_delayed);
 
-    // STAGE 5: Look-ahead limiter
-    float limited = lookahead_limiter_process(&state->lookahead, i2_delayed, envelope2,
-                                              state->envelope_limit);
+    // STAGE 5: Look-ahead limiter (for I and Q)
+    // lookahead_limiter_process_vec will write delayed storage and return limited_i &
+    // limited_q
+    float limited_i, limited_q;
+    lookahead_limiter_process_vec(&state->lookahead, i2_delayed, q2_delayed, envelope2,
+                                  state->envelope_limit, &limited_i, &limited_q);
+
     if (state->lookahead.current_gain < state->min_limiter_gain) {
       state->min_limiter_gain = state->lookahead.current_gain;
     }
 
     // STAGE 6: Post-limiter lowpass filter
     float output = apply_biquad_cascade(post_lpf_coeffs, state->post_lpf_state,
-                                        POST_LPF_BIQUAD_STAGES, limited);
-    //output *= POST_LPF_MAKEUP;  // I don't want to do this anymore
+                                        POST_LPF_BIQUAD_STAGES, limited_i);
     state->sample_count++;
-
     // remove pre-gain before returning
     float final_output = output / CESSB_PRE_GAIN;
 
@@ -532,6 +540,7 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
+
 
 
 
