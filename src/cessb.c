@@ -378,22 +378,24 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
       state->peak_after_clip = abs_clip;
     }
 
-    // STAGE 3: Overshoot control filter
-    float filtered =
-        apply_fir_filter(overshoot_coeffs, state->overshoot_delay, &state->overshoot_index,
-                         OVERSHOOT_FILTER_TAPS, clipped);
+    // STAGE 3: Overshoot control filter — operate on both I and Q
+    float filtered_i = apply_fir_filter(overshoot_coeffs, state->overshoot_i_delay,
+                                    &state->overshoot_i_index, OVERSHOOT_FILTER_TAPS, clipped_i);
+    float filtered_q = apply_fir_filter(overshoot_coeffs, state->overshoot_q_delay,
+                                    &state->overshoot_q_index, OVERSHOOT_FILTER_TAPS, clipped_q);
 
-    float abs_filt = fabsf(filtered);
+    // peak after overshoot is magnitude of complex sample
+    float abs_filt = sqrtf(filtered_i * filtered_i + filtered_q * filtered_q);
     if (abs_filt > state->peak_after_overshoot) {
       state->peak_after_overshoot = abs_filt;
     }
 
-    // STAGE 4: Second Hilbert envelope detection
-    float q2 = apply_fir_filter(hilbert_coeffs, state->hilbert2_delay,
-                                &state->hilbert2_index, HILBERT_TAPS, filtered);
-    float i2_delayed = get_delayed_sample(state->delay2_line, &state->delay2_index,
-                                          hilbert_delay_len, filtered);
-    float envelope2 = sqrtf(i2_delayed * i2_delayed + q2 * q2);
+    // STAGE 4: Second envelope detection — use delayed I and Q (keep same delay length)
+    float i2_delayed = get_delayed_sample(state->delay2_i, &state->delay2_i_index,
+                                      hilbert_delay_len, filtered_i);
+    float q2_delayed = get_delayed_sample(state->delay2_q, &state->delay2_q_index,
+                                      hilbert_delay_len, filtered_q);
+    float envelope2 = sqrtf(i2_delayed * i2_delayed + q2_delayed * q2_delayed);
 
     // STAGE 5: Look-ahead limiter
     float limited = lookahead_limiter_process(&state->lookahead, i2_delayed, envelope2,
@@ -530,6 +532,7 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
+
 
 
 
