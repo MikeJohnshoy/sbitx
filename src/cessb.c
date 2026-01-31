@@ -190,9 +190,9 @@ static float apply_biquad_cascade(const float coeffs[][5], biquad_state_t *state
 // LOOK-AHEAD LIMITER
 // ============================================================================
 
-/* Vector lookahead limiter: stores both I and Q delays and applies same gain to both */
+// lookahead limiter: stores both I and Q delays and applies same gain to both
 static void lookahead_limiter_init_vec(lookahead_limiter_t *lim, float sample_rate) {
-  /* zero both channel delays */
+  // zero both channel delays
   memset(lim->delay_i, 0, sizeof(lim->delay_i));
   memset(lim->delay_q, 0, sizeof(lim->delay_q));
   memset(lim->envelope, 0, sizeof(lim->envelope));
@@ -205,7 +205,7 @@ static void lookahead_limiter_init_vec(lookahead_limiter_t *lim, float sample_ra
   lim->release_coeff = time_constant_to_coeff(LOOKAHEAD_DEFAULT_RELEASE_MS, sample_rate);
 }
 
-/* helper: search peak in window is unchanged and can be reused */
+// search peak in window is unchanged and can be reused
 static float find_peak_in_window_vec(lookahead_limiter_t *lim) {
   float peak = 0.0f;
   int read_index = lim->write_index;
@@ -217,11 +217,12 @@ static float find_peak_in_window_vec(lookahead_limiter_t *lim) {
   return peak;
 }
 
-/* process both I and Q; out_i/out_q are the delayed, gain-applied outputs */
+// process both I and Q
+// out_i and out_q are the delayed, gain-applied outputs
 static void lookahead_limiter_process_vec(lookahead_limiter_t *lim,
                                           float input_i, float input_q, float envelope, float limit,
                                           float *out_i, float *out_q) {
-  /* store both channels + envelope at current write index */
+  // store both channels + envelope at current write index/
   lim->delay_i[lim->write_index] = input_i;
   lim->delay_q[lim->write_index] = input_q;
   lim->envelope[lim->write_index] = envelope;
@@ -245,7 +246,7 @@ static void lookahead_limiter_process_vec(lookahead_limiter_t *lim,
   if (lim->current_gain < 0.0f) lim->current_gain = 0.0f;
   if (lim->current_gain > 1.0f) lim->current_gain = 1.0f;
 
-  /* apply same gain to the delayed I and Q */
+  // apply same gain to the delayed I and Q
   *out_i = lim->delay_i[read_index] * lim->current_gain;
   *out_q = lim->delay_q[read_index] * lim->current_gain;
 
@@ -557,10 +558,3 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
-
-
-
-
-
-
-
