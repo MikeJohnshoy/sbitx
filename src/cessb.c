@@ -373,7 +373,7 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
       clipped_q = q;
     }
 
-    float abs_clip = fabsf(clipped);
+    float abs_clip = sqrtf(clipped_i * clipped_i + clipped_q * clipped_q);
     if (abs_clip > state->peak_after_clip) {
       state->peak_after_clip = abs_clip;
     }
@@ -530,5 +530,6 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
+
 
 
