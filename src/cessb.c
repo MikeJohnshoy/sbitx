@@ -8,20 +8,31 @@
 // normally occurs when clipped audio is filtered.
 //
 // Processing chain:
-// - Input audio arrives as int, converted to float
-// - Apply CESSB_PRE_GAIN to bring the working level up
-// - Hilbert transform (127 taps) to measure the instantaneous envelope
-// - Envelope-based hard clip at CESSB_CLIP_LEVEL
-// - Overshoot-control FIR LPF (65 taps, Blackman–Harris window, ~3 kHz)
-//   to prevent overshoot regeneration
-// - Second Hilbert transform to re-measure the envelope after filtering
-// - Look-ahead limiter (configurable lookahead up to 1024 samples) 
-//   with smooth attack/release, ceiling set by envelope_limit
-// - Post-limiter 6th-order (3 biquad) Butterworth LPF @ 3 kHz
+// - Input audio arrives as int (or float) and is normalized to float in [-1, +1]
+// - Apply CESSB_PRE_GAIN to bring the working level up for better dynamic range
+// - Compute analytic signal using Hilbert (HILBERT_TAPS):
+//     I = delayed real sample
+//     Q = Hilbert output (quadrature)
+// - Measure instantaneous envelope: envelope = sqrt(I*I + Q*Q)
+// - Envelope-based hard clip (vector clipping):
+//     If envelope > clip_level, scale BOTH I and Q by (clip_level / envelope)
+//     (preserves phase and applies radial limiting in the complex plane)
+// - Overshoot-control FIR LPF (OVERSHOOT_FILTER_TAPS, Blackman–Harris, ~3 kHz):
+//     Apply the same FIR to both I and Q (separate delay buffers)
+//     This prevents overshoot regeneration while keeping analytic symmetry
+// - Second envelope measurement:
+//     Use delayed filtered I and filtered Q
+//     envelope2 = sqrt(i2_delayed*i2_delayed + q2_delayed*q2_delayed)
+// - Vector look-ahead limiter (configurable up to LOOKAHEAD_MAX_SAMPLES):
+//     Maintain lookahead buffers for I, Q and envelope; compute peak over window,
+//     derive a target gain (ceiling = envelope_limit) and smooth it with attack/release.
+//     Apply the SAME time-aligned gain to the delayed I and Q to preserve phase.
+// - Collapse analytic pair to real transmit waveform (typically use limited I for SSB)
+// - Post-limiter 6th-order lowpass (3 biquad stages) @ 3 kHz applied to the real output
 // - Remove the initial pre-gain (divide by CESSB_PRE_GAIN)
-// - normalize output block to match peak in input block
+// - Normalize output block to match peak in input block (optional block-level gain)
 // - Convert float back to int32 before returning processed data
-// - Statistics (peaks/power) are accumulated and optionally printed periodically
+// - Statistics (peaks, average power, min limiter gain) accumulated for monitoring/debugging
 //
 // Key configuration parameters (see cessb.h)
 // There are also functions provided to set these if a control panel is needed.
@@ -546,6 +557,7 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
+
 
 
 
