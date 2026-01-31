@@ -37,15 +37,15 @@ typedef struct {
 
 // Look-ahead limiter state
 typedef struct {
-    float delay[LOOKAHEAD_MAX_SAMPLES];     // audio delay buffer
-    float envelope[LOOKAHEAD_MAX_SAMPLES];  // envelope delay buffer
-    int write_index;
-    int lookahead_samples;
-    
-    float current_gain;
-    float attack_coeff;
-    float release_coeff;
-    float peak_hold;
+  float delay_i[LOOKAHEAD_MAX_SAMPLES];
+  float delay_q[LOOKAHEAD_MAX_SAMPLES];
+  float envelope[LOOKAHEAD_MAX_SAMPLES];
+  int write_index;
+  int lookahead_samples;
+  float current_gain;
+  float attack_coeff;
+  float release_coeff;
+  float peak_hold;
 } lookahead_limiter_t;
 
 // Main CESSB state structure
@@ -62,8 +62,16 @@ typedef struct {
     int delay_index;
 
     // Overshoot control filter delay line
-    float overshoot_delay[OVERSHOOT_FILTER_TAPS];
-    int overshoot_index;
+    float overshoot_i_delay[OVERSHOOT_FILTER_TAPS];
+    float overshoot_q_delay[OVERSHOOT_FILTER_TAPS];
+    int   overshoot_i_index;
+    int   overshoot_q_index;
+
+    // second delay (delay2) for analytic pair
+    float delay2_i[HILBERT_DELAY_MAX];   /* HILBERT_DELAY_MAX = (HILBERT_TAPS/2)+1 or similar */
+    float delay2_q[HILBERT_DELAY_MAX];
+    int   delay2_i_index;
+    int   delay2_q_index;
 
     // STAGE 2: Hilbert transform delay lines
     float hilbert2_delay[HILBERT_TAPS];
@@ -117,3 +125,4 @@ void cessb_get_stats(cessb_state_t *state,
                      float *avg_power_gain_db,
                      float *talk_power_db);
 void cessb_reset_stats(cessb_state_t *state);
+
