@@ -363,11 +363,13 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
 
     // STAGE 2: Hard clip based on envelope
     float clipped;
-    if (envelope > state->clip_level && envelope > 1e-10f) {
-      float gain = state->clip_level / envelope;
-      clipped = i_delayed * gain;
+    if (envelope > clip_level && envelope > 1e-10f) {
+      float gain = clip_level / envelope;
+      clipped_i = i_delayed * gain;
+      clipped_q = q * gain;
     } else {
-      clipped = i_delayed;
+      clipped_i = i_delayed;
+      clipped_q = q;
     }
 
     float abs_clip = fabsf(clipped);
@@ -527,3 +529,4 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
+
