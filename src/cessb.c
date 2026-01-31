@@ -256,11 +256,17 @@ void cessb_init(cessb_state_t *state, float sample_rate) {
 
   state->hilbert_index = 0;
   state->delay_index = 0;
-  state->overshoot_index = 0;
-  state->hilbert2_index = 0;
-  state->delay2_index = 0;
 
-  lookahead_limiter_init(&state->lookahead, sample_rate);
+  // Overshoot indices (I & Q branches)
+  state->overshoot_i_index = 0;
+  state->overshoot_q_index = 0;
+
+  // Delay2 indices (I & Q branches) used for the second envelope measurement
+  state->delay2_i_index = 0;
+  state->delay2_q_index = 0;
+
+  // initialize the vector look-ahead limiter
+  lookahead_limiter_init_vec(&state->lookahead, sample_rate);
   cessb_reset_stats(state);
 }
 
@@ -343,8 +349,8 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
     return;
   }
 
-  int hilbert_delay_len = (HILBERT_TAPS / 2) + 1;
-
+  int hilbert_delay_len = HILBERT_DELAY_LEN;
+     
   for (int i = 0; i < num_samples; i++) {
     // measure input BEFORE pre-gain
     float abs_in = fabsf(samples[i]);
@@ -540,6 +546,7 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
+
 
 
 
