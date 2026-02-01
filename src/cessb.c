@@ -455,6 +455,8 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
 }
 
 void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples) {
+  if (num_samples < 0) return;
+  if (num_samples > 1024) return;  // ensure fits temp_buffer
   if (!state->enabled) {
     return;
   }
@@ -464,7 +466,6 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
   // convert int32 to float normalized to [-1, 1] and find peak_in
   float peak_in = 0.0f;
   for (int i = 0; i < num_samples; i++) {
-    if (num_samples > 1024) return;  // should never happen
     float s = (float)samples[i] / 2147483648.0f;
     temp_buffer[i] = s;
     float abs_s = fabsf(s);
@@ -564,5 +565,6 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
+
 
 
