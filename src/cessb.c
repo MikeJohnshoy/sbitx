@@ -205,14 +205,19 @@ static void lookahead_limiter_init_vec(lookahead_limiter_t *lim, float sample_ra
   lim->release_coeff = time_constant_to_coeff(LOOKAHEAD_DEFAULT_RELEASE_MS, sample_rate);
 }
 
-// search peak in window is unchanged and can be reused
 static float find_peak_in_window_vec(lookahead_limiter_t *lim) {
   float peak = 0.0f;
-  int read_index = lim->write_index;
+
+  // Window covers the last `lookahead_samples` entries ending at write_index:
+  // start = write_index - lookahead_samples + 1 (wrapped).
+  int start_index = lim->write_index - lim->lookahead_samples + 1;
+  if (start_index < 0) start_index += LOOKAHEAD_MAX_SAMPLES;
+
+  int idx = start_index;
   for (int i = 0; i < lim->lookahead_samples; i++) {
-    if (lim->envelope[read_index] > peak) peak = lim->envelope[read_index];
-    read_index++;
-    if (read_index >= LOOKAHEAD_MAX_SAMPLES) read_index = 0;
+    if (lim->envelope[idx] > peak) peak = lim->envelope[idx];
+    idx++;
+    if (idx >= LOOKAHEAD_MAX_SAMPLES) idx = 0;
   }
   return peak;
 }
@@ -558,3 +563,4 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
+
