@@ -24,6 +24,8 @@
 
 // Overshoot control filter - key CESSB innovation
 #define OVERSHOOT_FILTER_TAPS    65
+// Group delay for overshoot FIR (used in Stage 4 alignment)
+#define OVERSHOOT_DELAY_LEN      ((OVERSHOOT_FILTER_TAPS - 1) / 2)
 
 // Post-limiter LPF - multi-stage biquad for clean rolloff
 #define POST_LPF_BIQUAD_STAGES   3
@@ -73,8 +75,8 @@ typedef struct {
     int   overshoot_q_index;
 
     // Second delay (for stage-4 envelope measurement) for analytic pair
-    float delay2_i[HILBERT_DELAY_LEN];
-    float delay2_q[HILBERT_DELAY_LEN];
+    float delay2_i[OVERSHOOT_DELAY_LEN];
+    float delay2_q[OVERSHOOT_DELAY_LEN];
     int   delay2_i_index;
     int   delay2_q_index;
 
@@ -127,4 +129,5 @@ void cessb_get_stats(cessb_state_t *state,
                      float *avg_power_gain_db,
                      float *talk_power_db);
 void cessb_reset_stats(cessb_state_t *state);
+
 
