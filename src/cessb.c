@@ -357,6 +357,64 @@ void cessb_debug_print_stats(cessb_state_t *state) {
   printf("  avg power @ equal PEP  : %8.2f dB\n", talk_power_db);
 }
 
+// AUDIO CAPTURE CODE BEGINS HERE
+// this code is only here if code is built to capture audio in and out ...
+#if REC_AUDIO
+#include <time.h>
+
+static FILE *rec_in_file  = NULL;
+static FILE *rec_out_file = NULL;
+static unsigned long rec_samples_in_segment = 0;
+static unsigned long rec_segment_counter = 0;
+static int rec_need_new_segment = 1;  // start closed; open on first call
+
+static inline unsigned long rec_segment_max_samples(void) {
+  return (unsigned long)(CESSB_SAMPLE_RATE * REC_AUDIO_SEGMENT_SECONDS + 0.5f);
+}
+
+// Build filenames with date/time and a counter suffix to avoid collisions
+static void rec_make_filenames(char *in_name, size_t in_sz,
+                               char *out_name, size_t out_sz) {
+  time_t now = time(NULL);
+  struct tm *tm = localtime(&now);
+  rec_segment_counter++;
+
+  strftime(in_name,  in_sz,  "cessb_in_%Y%m%d_%H%M%S", tm);
+  strftime(out_name, out_sz, "cessb_out_%Y%m%d_%H%M%S", tm);
+
+  // Append counter to ensure uniqueness if multiple segments start in the same second
+  snprintf(in_name + strlen(in_name),  in_sz  - strlen(in_name),  "_%lu.raw", rec_segment_counter);
+  snprintf(out_name + strlen(out_name), out_sz - strlen(out_name), "_%lu.raw", rec_segment_counter);
+}
+
+static void rec_open_segment(void) {
+  if (!rec_need_new_segment) return;
+
+  char in_name[128], out_name[128];
+  rec_make_filenames(in_name, sizeof(in_name), out_name, sizeof(out_name));
+
+  rec_in_file  = fopen(in_name,  "ab");
+  rec_out_file = fopen(out_name, "ab");
+
+  rec_samples_in_segment = 0;
+  rec_need_new_segment = 0;
+}
+
+static void rec_close_segment(void) {
+  if (rec_in_file)  { fclose(rec_in_file);  rec_in_file = NULL; }
+  if (rec_out_file) { fclose(rec_out_file); rec_out_file = NULL; }
+  rec_need_new_segment = 1;
+}
+
+static inline void rec_note_block(int num_samples) {
+  rec_samples_in_segment += (unsigned long)num_samples;
+  if (rec_samples_in_segment >= rec_segment_max_samples()) {
+    rec_close_segment();
+  }
+}
+#endif
+// END OF AUDIO CAPTURE CODE
+
 // ============================================================================
 // MAIN CESSB PROCESSING
 // ============================================================================
@@ -461,6 +519,14 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
     return;
   }
 
+  #if REC_AUDIO
+    rec_open_segment();
+    if (rec_in_file) {
+      (void)fwrite(samples, sizeof(int32_t), num_samples, rec_in_file);
+    }
+    rec_note_block(num_samples);
+  #endif
+     
   float temp_buffer[1024];  // we get blocks of 1024 samples from sbitx tx_process()
 
   // convert int32 to float normalized to [-1, 1] and find peak_in
@@ -514,7 +580,17 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
   //  cessb_debug_print_stats(state);
   //  cessb_reset_stats(state);                      // also resets sample_count
   //}
+     
+  #if REC_AUDIO
+    // after samples[] holds processed int32
+    rec_open_segment();  // in case the previous rec_note_block closed the segment
+    if (rec_out_file) {
+      (void)fwrite(samples, sizeof(int32_t), num_samples, rec_out_file);
+    }
+    rec_note_block(num_samples);
+  #endif
 }
+
 // ============================================================================
 // STATISTICS
 // ============================================================================
@@ -565,6 +641,7 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
+
 
 
 
