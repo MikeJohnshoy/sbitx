@@ -7741,6 +7741,14 @@ gboolean check_plugin_controls(gpointer data)
 		{
 			comp_enabled = 0;
 		}
+   if (cessb_stat) {
+     if (!strcmp(cessb_stat->value, "ON")) {
+       cessb_enabled = 1;
+       cessb_set_enabled(&cessb_processor, 1);
+    } else {
+       cessb_enabled = 0;
+       cessb_set_enabled(&cessb_processor, 0);
+    }
 	}
   if (decode_stat)
 	{
