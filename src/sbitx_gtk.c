@@ -7573,6 +7573,7 @@ gboolean check_plugin_controls(gpointer data)
 	struct field *eptt_stat = get_field("#eptt");
 	struct field *vfo_stat = get_field("#vfo_lock");
 	struct field *comp_stat = get_field("#comp_plugin");
+	struct field *cessb_stat = get_field("#cessb_plugin");
 	struct field *ina260_stat = get_field("#ina260_option");
 	struct field *zero_beat_stat = get_field("#zero_beat");
 	struct field *tx_panafall_stat = get_field("#tx_panafall");
