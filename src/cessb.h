@@ -3,6 +3,10 @@
 
 #include <stdint.h>
 
+// add recording of input and output samples for test purpposes
+#define REC_AUDIO 0                  // set to 0 in operational code
+#define REC_AUDIO_SEGMENT_SECONDS 5  // per-file recording length
+
 // CESSB processing states
 #define CESSB_DISABLED 0
 #define CESSB_ENABLED  1
@@ -123,3 +127,4 @@ void cessb_get_stats(cessb_state_t *state,
                      float *avg_power_gain_db,
                      float *talk_power_db);
 void cessb_reset_stats(cessb_state_t *state);
+
