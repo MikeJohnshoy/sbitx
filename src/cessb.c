@@ -425,6 +425,7 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
   }
 
   int hilbert_delay_len = HILBERT_DELAY_LEN;
+  int overshoot_delay_len = OVERSHOOT_DELAY_LEN;
      
   for (int i = 0; i < num_samples; i++) {
     // measure input BEFORE pre-gain
@@ -479,9 +480,9 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
 
     // STAGE 4: Second envelope detection — use delayed I and Q
     float i2_delayed = get_delayed_sample(state->delay2_i, &state->delay2_i_index,
-                                          hilbert_delay_len, filtered_i);
+                                          overshoot_delay_len, filtered_i);
     float q2_delayed = get_delayed_sample(state->delay2_q, &state->delay2_q_index,
-                                          hilbert_delay_len, filtered_q);
+                                          overshoot_delay_len, filtered_q);
     float envelope2 = sqrtf(i2_delayed * i2_delayed + q2_delayed * q2_delayed);
 
     // STAGE 5: Look-ahead limiter (for I and Q)
@@ -641,6 +642,7 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
+
 
 
 
