@@ -388,6 +388,7 @@ static void rec_make_filenames(char *in_name, size_t in_sz,
 }
 
 static void rec_open_segment(void) {
+  fprintf(stderr, "rec_open_segment\n"); // TEMP DEBUG
   if (!rec_need_new_segment) return;
 
   char in_name[128], out_name[128];
@@ -642,6 +643,7 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
+
 
 
 
