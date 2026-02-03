@@ -30,7 +30,6 @@
 // - Collapse analytic pair to real transmit waveform (typically use limited I for SSB)
 // - Post-limiter 6th-order lowpass (3 biquad stages) @ 3 kHz applied to the real output
 // - Remove the initial pre-gain (divide by CESSB_PRE_GAIN)
-// - Normalize output block to match peak in input block (optional block-level gain)
 // - Convert float back to int32 before returning processed data
 // - Statistics (peaks, average power, min limiter gain) accumulated for monitoring/debugging
 //
@@ -543,24 +542,6 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
   // run CESSB processing (handles gain staging internally)
   cessb_process(state, temp_buffer, num_samples);
 
-  // find peak_out after CESSB processing
-  float peak_out = 0.0f;
-  for (int i = 0; i < num_samples; i++) {
-    float abs_s = fabsf(temp_buffer[i]);
-    if (abs_s > peak_out) {
-      peak_out = abs_s;
-    }
-  }
-
-  // normalize block so its peak matches the original block peak
-  // (only if both peaks are non‑zero to avoid division by zero)
-  if (peak_in > 0.0f && peak_out > 0.0f) {
-    float block_gain = peak_in / peak_out;
-    for (int i = 0; i < num_samples; i++) {
-      temp_buffer[i] *= block_gain;
-    }
-  }
-
   // convert float back to int32
   for (int i = 0; i < num_samples; i++) {
     float out = temp_buffer[i] * 2147483647.0f;
@@ -639,6 +620,7 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
+
 
 
 
