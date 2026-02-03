@@ -7562,207 +7562,144 @@ void tx_on(int trigger)
 	sound_reset(1);
 }
 
-gboolean check_plugin_controls(gpointer data)
-{ // Check for enabled plug-ins W2JON
-	struct field *eq_stat = get_field("#eq_plugin");
-	struct field *rx_eq_stat = get_field("#rx_eq_plugin");
-	struct field *notch_stat = get_field("#notch_plugin");
-	struct field *apf_stat = get_field("#apf_plugin");
-	struct field *dsp_stat = get_field("#dsp_plugin");
-	struct field *anr_stat = get_field("#anr_plugin");
-	struct field *eptt_stat = get_field("#eptt");
-	struct field *vfo_stat = get_field("#vfo_lock");
-	struct field *comp_stat = get_field("#comp_plugin");
-	struct field *cessb_stat = get_field("#cessb_plugin");
-	struct field *ina260_stat = get_field("#ina260_option");
-	struct field *zero_beat_stat = get_field("#zero_beat");
-	struct field *tx_panafall_stat = get_field("#tx_panafall");
-	struct field *fullscreen_stat = get_field("#fullscreen");
+gboolean check_plugin_controls(gpointer data) {  // Check for enabled plug-ins W2JON
+  struct field *eq_stat = get_field("#eq_plugin");
+  struct field *rx_eq_stat = get_field("#rx_eq_plugin");
+  struct field *notch_stat = get_field("#notch_plugin");
+  struct field *apf_stat = get_field("#apf_plugin");
+  struct field *dsp_stat = get_field("#dsp_plugin");
+  struct field *anr_stat = get_field("#anr_plugin");
+  struct field *eptt_stat = get_field("#eptt");
+  struct field *vfo_stat = get_field("#vfo_lock");
+  struct field *comp_stat = get_field("#comp_plugin");
+  struct field *cessb_stat = get_field("#cessb_plugin");
+  struct field *ina260_stat = get_field("#ina260_option");
+  struct field *zero_beat_stat = get_field("#zero_beat");
+  struct field *tx_panafall_stat = get_field("#tx_panafall");
+  struct field *fullscreen_stat = get_field("#fullscreen");
   struct field *decode_stat = get_field("#decode");
 
-	if (fullscreen_stat)
-	{
-		int fs = !strcmp(fullscreen_stat->value, "ON") ? 1 : 0;
-		on_fullscreen_toggle(fs);
-	}
+  if (fullscreen_stat) {
+    int fs = !strcmp(fullscreen_stat->value, "ON") ? 1 : 0;
+    on_fullscreen_toggle(fs);
+  }
 
-	if (tx_panafall_stat)
-	{
-		if (!strcmp(tx_panafall_stat->value, "ON"))
-		{
-			tx_panafall_enabled = 1;
-			set_field("#scope_autoadj", "OFF");
-		}
-		else if (!strcmp(tx_panafall_stat->value, "OFF"))
-		{
-			tx_panafall_enabled = 0;
-		}
-	}
-
-	if (zero_beat_stat)
-	{
-		if (!strcmp(zero_beat_stat->value, "ON"))
-		{
-			zero_beat_enabled = 1;
-		}
-		else if (!strcmp(zero_beat_stat->value, "OFF"))
-		{
-			zero_beat_enabled = 0;
-		}
-	}
-	if (ina260_stat)
-	{
-		if (!strcmp(ina260_stat->value, "ON"))
-		{
-			has_ina260 = 1;
-		}
-		else if (!strcmp(ina260_stat->value, "OFF"))
-		{
-			has_ina260 = 0;
-		}
-	}
-
-	if (eq_stat)
-	{
-		if (!strcmp(eq_stat->value, "ON"))
-		{
-			eq_is_enabled = 1;
-		}
-		else if (!strcmp(eq_stat->value, "OFF"))
-		{
-			eq_is_enabled = 0;
-		}
-	}
-
-	if (rx_eq_stat)
-	{
-		if (!strcmp(rx_eq_stat->value, "ON"))
-		{
-			rx_eq_is_enabled = 1;
-		}
-		else if (!strcmp(rx_eq_stat->value, "OFF"))
-		{
-			rx_eq_is_enabled = 0;
-		}
-	}
-
-	if (notch_stat)
-	{
-		if (!strcmp(notch_stat->value, "ON"))
-		{
-			notch_enabled = 1;
-		}
-		else if (!strcmp(notch_stat->value, "OFF"))
-		{
-			notch_enabled = 0;
-		}
-	}
-
-	if (apf_stat)
-	{
-		if (!strcmp(apf_stat->value, "ON"))
-		{
-/*
-			printf(" apf_stat \n");
-			struct field *apf_gain_field = get_field("#apf_gain");
-			struct field *apf_width_field = get_field("#apf_width");
-			if ( ((abs(apf1.gain - (float)atoi(apf_gain_field->value))) > 1e-9) || // only if changed
-			     ((abs(apf1.width - (float)atoi(apf_width_field->value))) > 1.e-9) )
-			{
-				apf1.gain = (float)atoi(apf_gain_field->value);
-				apf1.width = (float)atoi(apf_width_field->value);
-				apf1.ison = 1;
-				init_apf();
-			}
-*/
-			apf1.ison = 1;
-		}
-		else if (!strcmp(apf_stat->value, "OFF"))
-		{
-			apf1.ison = 0;
-		}
-	}
-
-	if (dsp_stat)
-	{
-		if (!strcmp(dsp_stat->value, "ON"))
-		{
-			dsp_enabled = 1;
-		}
-		else if (!strcmp(dsp_stat->value, "OFF"))
-		{
-			dsp_enabled = 0;
-		}
-	}
-
-	if (anr_stat)
-	{
-		if (!strcmp(anr_stat->value, "ON"))
-		{
-			anr_enabled = 1;
-		}
-		else if (!strcmp(anr_stat->value, "OFF"))
-		{
-			anr_enabled = 0;
-		}
-	}
-
-	if (eptt_stat)
-	{
-		if (!strcmp(eptt_stat->value, "ON"))
-		{
-			eptt_enabled = 1;
-		}
-		else if (!strcmp(eptt_stat->value, "OFF"))
-		{
-			eptt_enabled = 0;
-		}
-	}
-
-	if (vfo_stat)
-	{
-		if (!strcmp(vfo_stat->value, "ON"))
-		{
-			vfo_lock_enabled = 1;
-		}
-		else if (!strcmp(vfo_stat->value, "OFF"))
-		{
-			vfo_lock_enabled = 0;
-		}
-	}
-
-	if (comp_stat)
-	{
-		if (atoi(comp_stat->value) != 0)
-		{
-			comp_enabled = 1;
-		}
-		else
-		{
-			comp_enabled = 0;
-		}
-   if (cessb_stat) {
-     if (!strcmp(cessb_stat->value, "ON")) {
-       cessb_enabled = 1;
-       cessb_set_enabled(&cessb_processor, 1);
-    } else {
-       cessb_enabled = 0;
-       cessb_set_enabled(&cessb_processor, 0);
+  if (tx_panafall_stat) {
+    if (!strcmp(tx_panafall_stat->value, "ON")) {
+      tx_panafall_enabled = 1;
+      set_field("#scope_autoadj", "OFF");
+    } else if (!strcmp(tx_panafall_stat->value, "OFF")) {
+      tx_panafall_enabled = 0;
     }
-	}
-  if (decode_stat)
-	{
-		if (!strcmp(decode_stat->value, "ON"))
-		{
-			cw_decode_enabled = 1;
-		}
-		else if (!strcmp(decode_stat->value, "OFF"))
-		{
-			cw_decode_enabled = 0;
-		}
-	}
-	return TRUE; // Return TRUE to keep the timer running
-}
+  }
+
+  if (zero_beat_stat) {
+    if (!strcmp(zero_beat_stat->value, "ON")) {
+      zero_beat_enabled = 1;
+    } else if (!strcmp(zero_beat_stat->value, "OFF")) {
+      zero_beat_enabled = 0;
+    }
+  }
+
+  if (ina260_stat) {
+    if (!strcmp(ina260_stat->value, "ON")) {
+      has_ina260 = 1;
+    } else if (!strcmp(ina260_stat->value, "OFF")) {
+      has_ina260 = 0;
+    }
+  }
+
+  if (eq_stat) {
+    if (!strcmp(eq_stat->value, "ON")) {
+      eq_is_enabled = 1;
+    } else if (!strcmp(eq_stat->value, "OFF")) {
+      eq_is_enabled = 0;
+    }
+  }
+
+  if (rx_eq_stat) {
+    if (!strcmp(rx_eq_stat->value, "ON")) {
+      rx_eq_is_enabled = 1;
+    } else if (!strcmp(rx_eq_stat->value, "OFF")) {
+      rx_eq_is_enabled = 0;
+    }
+  }
+
+  if (notch_stat) {
+    if (!strcmp(notch_stat->value, "ON")) {
+      notch_enabled = 1;
+    } else if (!strcmp(notch_stat->value, "OFF")) {
+      notch_enabled = 0;
+    }
+  }
+
+  if (apf_stat) {
+    if (!strcmp(apf_stat->value, "ON")) {
+      apf1.ison = 1;
+    } else if (!strcmp(apf_stat->value, "OFF")) {
+      apf1.ison = 0;
+    }
+  }
+
+  if (dsp_stat) {
+    if (!strcmp(dsp_stat->value, "ON")) {
+      dsp_enabled = 1;
+    } else if (!strcmp(dsp_stat->value, "OFF")) {
+      dsp_enabled = 0;
+    }
+  }
+
+  if (anr_stat) {
+    if (!strcmp(anr_stat->value, "ON")) {
+      anr_enabled = 1;
+    } else if (!strcmp(anr_stat->value, "OFF")) {
+      anr_enabled = 0;
+    }
+  }
+
+  if (eptt_stat) {
+    if (!strcmp(eptt_stat->value, "ON")) {
+      eptt_enabled = 1;
+    } else if (!strcmp(eptt_stat->value, "OFF")) {
+      eptt_enabled = 0;
+    }
+  }
+
+  if (vfo_stat) {
+    if (!strcmp(vfo_stat->value, "ON")) {
+      vfo_lock_enabled = 1;
+    } else if (!strcmp(vfo_stat->value, "OFF")) {
+      vfo_lock_enabled = 0;
+    }
+  }
+
+  if (comp_stat) {
+    if (atoi(comp_stat->value) != 0) {
+      comp_enabled = 1;
+    } else {
+      comp_enabled = 0;
+    }
+  } 
+
+  if (cessb_stat) {
+    if (!strcmp(cessb_stat->value, "ON")) {
+      cessb_enabled = 1;
+      cessb_set_enabled(&cessb_processor, 1);
+    } else {
+      cessb_enabled = 0;
+      cessb_set_enabled(&cessb_processor, 0);
+    }
+  }
+
+  if (decode_stat) {
+    if (!strcmp(decode_stat->value, "ON")) {
+      cw_decode_enabled = 1;
+    } else if (!strcmp(decode_stat->value, "OFF")) {
+      cw_decode_enabled = 0;
+    }
+  }
+
+  return TRUE; /* Return TRUE to keep the timer running */
 
 // Function to check r1:volume and update input_volume variable for volume control normalization -W2JON
 void check_r1_volume()
