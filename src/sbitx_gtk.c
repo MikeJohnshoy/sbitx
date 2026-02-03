@@ -7594,43 +7594,38 @@ gboolean check_plugin_controls(gpointer data) {  // Check for enabled plug-ins W
   }
 
   if (zero_beat_stat) {
-    if (!strcmp(zero_beat_stat->value, "ON")) {
+    if (!strcmp(zero_beat_stat->value, "ON"))
       zero_beat_enabled = 1;
-    } else if (!strcmp(zero_beat_stat->value, "OFF")) {
+    else if (!strcmp(zero_beat_stat->value, "OFF"))
       zero_beat_enabled = 0;
-    }
   }
 
   if (ina260_stat) {
-    if (!strcmp(ina260_stat->value, "ON")) {
+    if (!strcmp(ina260_stat->value, "ON"))
       has_ina260 = 1;
-    } else if (!strcmp(ina260_stat->value, "OFF")) {
+    else if (!strcmp(ina260_stat->value, "OFF"))
       has_ina260 = 0;
-    }
   }
 
   if (eq_stat) {
-    if (!strcmp(eq_stat->value, "ON")) {
+    if (!strcmp(eq_stat->value, "ON"))
       eq_is_enabled = 1;
-    } else if (!strcmp(eq_stat->value, "OFF")) {
+    else if (!strcmp(eq_stat->value, "OFF"))
       eq_is_enabled = 0;
-    }
   }
 
   if (rx_eq_stat) {
-    if (!strcmp(rx_eq_stat->value, "ON")) {
+    if (!strcmp(rx_eq_stat->value, "ON"))
       rx_eq_is_enabled = 1;
-    } else if (!strcmp(rx_eq_stat->value, "OFF")) {
+    else if (!strcmp(rx_eq_stat->value, "OFF"))
       rx_eq_is_enabled = 0;
-    }
   }
 
   if (notch_stat) {
-    if (!strcmp(notch_stat->value, "ON")) {
+    if (!strcmp(notch_stat->value, "ON"))
       notch_enabled = 1;
-    } else if (!strcmp(notch_stat->value, "OFF")) {
+    else if (!strcmp(notch_stat->value, "OFF"))
       notch_enabled = 0;
-    }
   }
 
   if (apf_stat) {
@@ -7642,44 +7637,39 @@ gboolean check_plugin_controls(gpointer data) {  // Check for enabled plug-ins W
   }
 
   if (dsp_stat) {
-    if (!strcmp(dsp_stat->value, "ON")) {
+    if (!strcmp(dsp_stat->value, "ON"))
       dsp_enabled = 1;
-    } else if (!strcmp(dsp_stat->value, "OFF")) {
+    else if (!strcmp(dsp_stat->value, "OFF"))
       dsp_enabled = 0;
-    }
   }
 
   if (anr_stat) {
-    if (!strcmp(anr_stat->value, "ON")) {
+    if (!strcmp(anr_stat->value, "ON"))
       anr_enabled = 1;
-    } else if (!strcmp(anr_stat->value, "OFF")) {
+    else if (!strcmp(anr_stat->value, "OFF"))
       anr_enabled = 0;
-    }
   }
 
   if (eptt_stat) {
-    if (!strcmp(eptt_stat->value, "ON")) {
+    if (!strcmp(eptt_stat->value, "ON"))
       eptt_enabled = 1;
-    } else if (!strcmp(eptt_stat->value, "OFF")) {
+    else if (!strcmp(eptt_stat->value, "OFF"))
       eptt_enabled = 0;
-    }
   }
 
   if (vfo_stat) {
-    if (!strcmp(vfo_stat->value, "ON")) {
+    if (!strcmp(vfo_stat->value, "ON"))
       vfo_lock_enabled = 1;
-    } else if (!strcmp(vfo_stat->value, "OFF")) {
+    else if (!strcmp(vfo_stat->value, "OFF"))
       vfo_lock_enabled = 0;
-    }
   }
 
   if (comp_stat) {
-    if (atoi(comp_stat->value) != 0) {
+    if (atoi(comp_stat->value) != 0)
       comp_enabled = 1;
-    } else {
+    else
       comp_enabled = 0;
-    }
-  } 
+  }
 
   if (cessb_stat) {
     if (!strcmp(cessb_stat->value, "ON")) {
@@ -7692,14 +7682,14 @@ gboolean check_plugin_controls(gpointer data) {  // Check for enabled plug-ins W
   }
 
   if (decode_stat) {
-    if (!strcmp(decode_stat->value, "ON")) {
+    if (!strcmp(decode_stat->value, "ON"))
       cw_decode_enabled = 1;
-    } else if (!strcmp(decode_stat->value, "OFF")) {
+    else if (!strcmp(decode_stat->value, "OFF"))
       cw_decode_enabled = 0;
-    }
   }
 
-  return TRUE; /* Return TRUE to keep the timer running */
+  return TRUE; /* keep the timer running */
+}
 
 // Function to check r1:volume and update input_volume variable for volume control normalization -W2JON
 void check_r1_volume()
