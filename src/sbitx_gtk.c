@@ -7892,9 +7892,9 @@ void set_ui(int id)
 	current_layout = id;
 }
 
-int static cw_keydown = 0;
-int static cw_hold_until = 0;
-int static cw_hold_duration = 150;
+static int cw_keydown = 0;
+static int cw_hold_until = 0;
+static int cw_hold_duration = 150;
 
 static void cw_key(int state)
 {
