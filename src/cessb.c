@@ -623,16 +623,3 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
