@@ -613,6 +613,7 @@ void cessb_get_stats(cessb_state_t *state, float *peak_reduction_db,
     *talk_power_db = 0.0f;
   }
 }
+
 void cessb_reset_stats(cessb_state_t *state) {
   state->peak_input = 0.0f;
   state->peak_output = 0.0f;
@@ -623,3 +624,4 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
+
