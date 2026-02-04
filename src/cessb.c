@@ -35,9 +35,10 @@
 // - Statistics (peaks, average power, min limiter gain) accumulated for monitoring/debugging
 //
 // Key configuration parameters (see cessb.h)
-// There are also functions provided to set these if a control panel is needed.
+// There are also functions provided to set several of these if a control panel is needed.
 //
 //   CESSB_PRE_GAIN                Add gain so float values reach +/- 1
+//   CESSB_OUTPUT_GAIN             Added to keep the output in the same +/- 1 range
 //   CESSB_CLIP_LEVEL              Initial clip threshold (default 0.85)
 //   CESSB_ENVELOPE_LIMIT          Final limiter ceiling (default 1.0)
 //   LOOKAHEAD_DEFAULT_SAMPLES     Default look-ahead (~2 ms at 96 kHz)
@@ -622,6 +623,7 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
+
 
 
 
