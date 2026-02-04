@@ -29,7 +29,8 @@
 //     Apply the SAME time-aligned gain to the delayed I and Q to preserve phase.
 // - Collapse analytic pair to real transmit waveform (typically use limited I for SSB)
 // - Post-limiter 6th-order lowpass (3 biquad stages) @ 3 kHz applied to the real output
-// - Remove the initial pre-gain (divide by CESSB_PRE_GAIN)
+// - Apply post-limiter makeup: final_output = output * (CESSB_OUTPUT_GAIN / CESSB_PRE_GAIN)
+//     (unity when CESSB_OUTPUT_GAIN == CESSB_PRE_GAIN; set lower for headroom)
 // - Convert float back to int32 before returning processed data
 // - Statistics (peaks, average power, min limiter gain) accumulated for monitoring/debugging
 //
@@ -622,6 +623,7 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
+
 
 
 
