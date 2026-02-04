@@ -16,6 +16,7 @@
 #define CESSB_CLIP_LEVEL         0.85f   // hard-clip threshold (default)
 #define CESSB_ENVELOPE_LIMIT     1.00f   // final limiter ceiling
 #define CESSB_SAMPLE_RATE        96000.0f
+#define CESSB_OUTPUT_GAIN        CESSB_PRE_GAIN
 
 // Hilbert transform filter length (must be odd)
 #define HILBERT_TAPS             127
@@ -129,6 +130,7 @@ void cessb_get_stats(cessb_state_t *state,
                      float *avg_power_gain_db,
                      float *talk_power_db);
 void cessb_reset_stats(cessb_state_t *state);
+
 
 
 
