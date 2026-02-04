@@ -504,9 +504,8 @@ void cessb_process(cessb_state_t *state, float *samples, int num_samples) {
     float output = apply_biquad_cascade(post_lpf_coeffs, state->post_lpf_state,
                                         POST_LPF_BIQUAD_STAGES, limited_i);
     state->sample_count++;
-    // remove pre-gain before returning
-    // apply makeup gain so we’re not forced to divide by full pre-gain
-    // maintain unity-ish output
+    // I have a hard time reasoning about the gain in this step, it is necessary
+    // to keep output level in range
     float final_output = output * (CESSB_OUTPUT_GAIN / CESSB_PRE_GAIN);
 
     // measure output AFTER removing pre-gain
@@ -623,6 +622,7 @@ void cessb_reset_stats(cessb_state_t *state) {
   state->min_limiter_gain = 1.0f;
   state->sample_count = 0;  // reset window sample count so averages use the same window
 }
+
 
 
 
