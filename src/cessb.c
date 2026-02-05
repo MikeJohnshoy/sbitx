@@ -618,7 +618,7 @@ void cessb_process_int32(cessb_state_t *state, int32_t *samples, int num_samples
         if (out > 2147483647.0f) out = 2147483647.0f;
         if (out < -2147483648.0f) out = -2147483648.0f;
         samples[i] = (int32_t)out;
-    
+    }
 
 #if REC_AUDIO
     if (!rec_done && rec_out_file) {
@@ -679,3 +679,4 @@ void cessb_reset_stats(cessb_state_t *state) {
     state->min_limiter_gain = 1.0f;
     state->sample_count = 0;
 }
+
