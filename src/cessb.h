@@ -14,8 +14,8 @@
 #define CESSB_SAMPLE_RATE 96000.0f
 
 // --- AGC Parameters ---
-// Target level for AGC output (leaves headroom for peaks)
-#define AGC_TARGET_LEVEL 0.75f
+// Target level for AGC output
+#define AGC_TARGET_LEVEL 0.80f
 // Maximum gain boost (40 dB)
 #define AGC_MAX_GAIN 100.0f
 // Maximum gain cut (20 dB)
@@ -193,6 +193,7 @@ void cessb_get_stats(cessb_state_t *state, float *peak_reduction_db,
                      float *avg_power_gain_db, float *talk_power_db);
 void cessb_reset_stats(cessb_state_t *state);
 void cessb_debug_print_stats(cessb_state_t *state);
+
 
 
 
