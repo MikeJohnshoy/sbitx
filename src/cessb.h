@@ -15,7 +15,7 @@
 
 // --- AGC Parameters ---
 // Target level for AGC output
-#define AGC_TARGET_LEVEL 1.00f
+#define AGC_TARGET_LEVEL 1.10f
 // Maximum gain boost (40 dB)
 #define AGC_MAX_GAIN 100.0f
 // Maximum gain cut (20 dB)
@@ -25,13 +25,13 @@
 // AGC release time in milliseconds (slow to avoid pumping)
 #define AGC_RELEASE_MS 500.0f
 // AGC gain smoothing time constant (very slow for smooth gain changes)
-#define AGC_GAIN_SMOOTH_MS 100.0f
+#define AGC_GAIN_SMOOTH_MS 1000.0f
 
 // --- CESSB Thresholds ---
 // Clip level: initial hard clip threshold (as fraction of 1.0)
-#define CESSB_CLIP_LEVEL 0.90f
+#define CESSB_CLIP_LEVEL 0.95f
 // Envelope limit: final limiter ceiling
-#define CESSB_ENVELOPE_LIMIT 0.88f
+#define CESSB_ENVELOPE_LIMIT 0.93f
 
 // --- Filter Parameters ---
 // Hilbert transform filter length (must be odd)
@@ -193,6 +193,7 @@ void cessb_get_stats(cessb_state_t *state, float *peak_reduction_db,
                      float *avg_power_gain_db, float *talk_power_db);
 void cessb_reset_stats(cessb_state_t *state);
 void cessb_debug_print_stats(cessb_state_t *state);
+
 
 
 
