@@ -59,7 +59,7 @@
 
 // --- Debug Audio Recording ---
 // Set to 1 to enable recording of input/output audio for analysis
-#define REC_AUDIO 1
+#define REC_AUDIO 0
 #define REC_AUDIO_SEGMENT_SECONDS 5
 
 // --- Enable/Disable ---
@@ -193,6 +193,7 @@ void cessb_get_stats(cessb_state_t *state, float *peak_reduction_db,
                      float *avg_power_gain_db, float *talk_power_db);
 void cessb_reset_stats(cessb_state_t *state);
 void cessb_debug_print_stats(cessb_state_t *state);
+
 
 
 
