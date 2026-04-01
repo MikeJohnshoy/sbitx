@@ -2479,6 +2479,7 @@ void draw_waterfall(struct field *f, cairo_t *gfx)
 
 	int index = 0;
 	static float wf_offset = 0;
+	const float autoscope_headroom_db = 6.0f;   // visual headroom, ~6 dB
 	for (int i = 0; i < f->width; i++)
 	{
 		// Scale the input value (original behavior restored)
@@ -2487,12 +2488,17 @@ void draw_waterfall(struct field *f, cairo_t *gfx)
 		// Normalize data to the range [0, 100] based on adjusted min/max
 		float normalized = 0;
 
-		if (!strcmp(field_str("AUTOSCOPE"), "ON")&& !in_tx) {
-			normalized = (scaled_value - wf_offset) / (max_db - wf_offset) * 100.0f;
+		if (!strcmp(field_str("AUTOSCOPE"), "ON") && !in_tx) {
+		    // add some headroom so AUTOSCOPE isn’t so hot
+		    float auto_min = wf_offset;
+		    float auto_max = max_db + autoscope_headroom_db;
+		
+		    normalized = (scaled_value - auto_min) / (auto_max - auto_min) * 100.0f;
 		} else {
-			normalized = (scaled_value - min_db) / (max_db - min_db) * 100.0f;
-			wf_offset = 0;
+		    normalized = (scaled_value - min_db) / (max_db - min_db) * 100.0f;
+		    wf_offset = 0;
 		}
+
 
 		// Clamp normalized values to [0, 100]
 		if (normalized < 0)
