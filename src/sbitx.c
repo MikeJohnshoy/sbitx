@@ -1856,6 +1856,63 @@ void read_power()
 
 static int tx_process_restart = 1;
 
+// ============================================================================
+// tx_process_iq() — new lightweight TX path for when we have pre-processed IQ 
+// from SDRConsole.
+// The remote app has already done all SSB generation (filtering, modulation,
+// sideband selection).  We only need to:
+//   1. Fetch 96 kHz IQ from the hpsdr ring buffer
+//   2. Combine I and Q into a real baseband signal (I + jQ → real part)
+//   3. Scale by tx_amp * alc_level (power control + ALC)
+//   4. Write to output_tx[]
+//   5. Call read_power() so ALC feedback keeps working
+//   6. Update the modulation display
+// ============================================================================
+static void tx_process_iq(int32_t *input_rx, int32_t *input_mic,
+                          int32_t *output_speaker, int32_t *output_tx,
+                          int n_samples)
+{
+    double iq_i[n_samples];
+    double iq_q[n_samples];
+
+    // Fetch upsampled 96 kHz IQ from the HPSDR ring buffer
+    int got = hpsdr_get_tx_iq(iq_i, iq_q, n_samples);
+
+    // If the ring buffer didn't have enough, zero-pad the remainder
+    for (int k = got; k < n_samples; k++) {
+        iq_i[k] = 0.0;
+        iq_q[k] = 0.0;
+    }
+
+    // Scale factor: volume * tx_amp * alc_level  (same as the tail of tx_process)
+    // volume is the static double (~100.0), tx_amp is set by set_tx_power_levels(),
+    // alc_level is the ALC multiplier (0..1) maintained by read_power().
+    //
+    // The IQ from SDRConsole is normalized ±1.0.  We need to scale up to the
+    // full int32 DAC range that the codec expects (~±2 billion at full power).
+    // The factor 40000000.0 is a reasonable starting point — tune to taste.
+    #define HPSDR_TX_IQ_SCALE 40000000.0
+
+    float scale = HPSDR_TX_IQ_SCALE * tx_amp * alc_level;
+
+    for (int i = 0; i < n_samples; i++) {
+        // The DAC output is a real signal.  For SSB the remote app has already
+        // placed the signal on the correct sideband, so we just take the real
+        // part of the analytic signal.  (If SDRConsole sends USB, I is the
+        // real baseband; Q is the Hilbert-transformed quadrature.)
+        double sample = iq_i[i];
+
+        output_tx[i] = (int32_t)(sample * scale);
+        output_speaker[i] = 0;   // mute speaker during TX
+    }
+
+    // ALC / power feedback — reads the PA bridge and adjusts alc_level
+    read_power();
+
+    // Update the TX modulation envelope display
+    sdr_modulation_update(output_tx, n_samples, tx_amp);
+}
+
 void tx_process(
 	int32_t *input_rx, int32_t *input_mic,
 	int32_t *output_speaker, int32_t *output_tx,
@@ -2365,37 +2422,44 @@ static void fir_lpf_iq(const double *in_i, const double *in_q,
 // called when a block of samples from the mic or rx IF is ready
 void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speaker,
                    int32_t *output_tx, int n_samples) {
-    if (in_tx) {
-        // tx_process continues to operate on real samples for now
-        tx_process(input_rx, input_mic, output_speaker, output_tx, n_samples);
-
+  if (in_tx) {
+    // If a remote SDR app (e.g., SDRConsole) is providing pre-processed
+    // TX IQ data, use the lightweight IQ path that preserves tx_amp/ALC
+    // but skips mic processing, compression, EQ, FFT filtering, etc.
+    if (hpsdr_tx_iq_active()) {
+      tx_process_iq(input_rx, input_mic, output_speaker, output_tx, n_samples);
     } else {
-        // generate I and Q data from the real input before passing samples to rx_linear()
-        // Note: this also downconverts to baseband
-        double iq_i[MAX_BINS / 2];
-        double iq_q[MAX_BINS / 2];
-        double filt_i[MAX_BINS / 2];
-        double filt_q[MAX_BINS / 2];
+      // tx_process continues to operate on real samples for now
+      tx_process(input_rx, input_mic, output_speaker, output_tx, n_samples);
+    }
 
-        for (int m = 0; m < MAX_BINS / 2; m++) {
-            double rx_sample = (1.0 * input_rx[m]) / ADC_SCALE;
+  } else {
+    // generate I and Q data from the real input before passing samples to rx_linear()
+    // Note: this also downconverts to baseband
+    double iq_i[MAX_BINS / 2];
+    double iq_q[MAX_BINS / 2];
+    double filt_i[MAX_BINS / 2];
+    double filt_q[MAX_BINS / 2];
 
-            int osc_i, osc_q;
-            vfo_read_iq(&rx_osc, &osc_i, &osc_q);
+    for (int m = 0; m < MAX_BINS / 2; m++) {
+      double rx_sample = (1.0 * input_rx[m]) / ADC_SCALE;
 
-            static const double VFO_SCALE = 1.0 / 1073741824.0;  // 2^30
-            iq_i[m] = rx_sample * (osc_i * VFO_SCALE);
-            iq_q[m] = rx_sample * (-osc_q * VFO_SCALE);
-        }
+      int osc_i, osc_q;
+      vfo_read_iq(&rx_osc, &osc_i, &osc_q);
 
-        // FIR low-pass filter after the mixer
-        fir_lpf_iq(iq_i, iq_q, filt_i, filt_q, MAX_BINS / 2);
+      static const double VFO_SCALE = 1.0 / 1073741824.0; // 2^30
+      iq_i[m] = rx_sample * (osc_i * VFO_SCALE);
+      iq_q[m] = rx_sample * (-osc_q * VFO_SCALE);
+    }
 
-        // pass filtered I and Q data to receive pipeline
-        rx_linear(filt_i, filt_q, output_speaker, output_tx, n_samples);
-        
-        // no pass filtered I and Q data to receive pipeline
-        //rx_linear(iq_i, iq_q, output_speaker, output_tx, n_samples);
+    // FIR low-pass filter after the mixer
+    fir_lpf_iq(iq_i, iq_q, filt_i, filt_q, MAX_BINS / 2);
+
+    // pass filtered I and Q data to receive pipeline
+    rx_linear(filt_i, filt_q, output_speaker, output_tx, n_samples);
+
+    // no pass filtered I and Q data to receive pipeline
+    // rx_linear(iq_i, iq_q, output_speaker, output_tx, n_samples);
 
     // EXTERNAL USERS OF I&Q DATA GET IT HERE
     // THEY SHOULD CREATE THEIR OWN COPY OF THE DATA
@@ -2405,9 +2469,9 @@ void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speake
     hpsdr_send_iq(filt_q, filt_i, MAX_BINS / 2);
   }
 
-	if (pf_record) {
-		wav_record(in_tx == 0 ? output_speaker : input_mic, n_samples);
-	}
+  if (pf_record) {
+    wav_record(in_tx == 0 ? output_speaker : input_mic, n_samples);
+  }
 }
 
 // Existing set_rx_filter function
