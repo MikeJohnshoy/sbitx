@@ -39,7 +39,87 @@ extern void remote_execute(char *command);
 extern int freq_hdr;
 extern int in_tx;
 
-// --- Packet construction & inline transmission ------------------------------
+// =============================================================================
+// TX IQ ring buffer — receives 48kHz IQ from remote SDR client,
+// upsamples to 96kHz, and makes it available to sound_process().
+// =============================================================================
+
+#define TX_IQ_RING_SIZE 8192   // must be power of 2, ~85 ms at 96 kHz
+#define TX_IQ_RING_MASK (TX_IQ_RING_SIZE - 1)
+
+static double tx_iq_ring_i[TX_IQ_RING_SIZE];
+static double tx_iq_ring_q[TX_IQ_RING_SIZE];
+static volatile int tx_iq_wr = 0;   // written by poll thread
+static volatile int tx_iq_rd = 0;   // read by audio thread
+
+// Timeout: if no TX IQ arrives for this many ms, declare inactive
+#define TX_IQ_TIMEOUT_MS 500
+static volatile unsigned long tx_iq_last_time_ms = 0;
+
+// Previous sample for the 2× interpolation filter
+static double tx_up_prev_i = 0.0;
+static double tx_up_prev_q = 0.0;
+
+static unsigned long millis_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (unsigned long)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
+}
+
+// Write one 48 kHz sample pair into the ring as two 96 kHz samples
+// using linear interpolation (simple half-band upsample).
+static void tx_iq_push_48k(double i_val, double q_val)
+{
+    // Interpolated mid-point sample (insert between previous and current)
+    double mid_i = 0.5 * (tx_up_prev_i + i_val);
+    double mid_q = 0.5 * (tx_up_prev_q + q_val);
+
+    int wr = tx_iq_wr;
+
+    tx_iq_ring_i[wr & TX_IQ_RING_MASK] = mid_i;
+    tx_iq_ring_q[wr & TX_IQ_RING_MASK] = mid_q;
+    wr++;
+
+    tx_iq_ring_i[wr & TX_IQ_RING_MASK] = i_val;
+    tx_iq_ring_q[wr & TX_IQ_RING_MASK] = q_val;
+    wr++;
+
+    tx_iq_wr = wr;
+    tx_up_prev_i = i_val;
+    tx_up_prev_q = q_val;
+    tx_iq_last_time_ms = millis_now();
+}
+
+// --- Public API for sbitx.c --------------------------------------------------
+
+int hpsdr_tx_iq_active(void)
+{
+    if (!client_active) return 0;
+    // Check that we received TX IQ data recently
+    unsigned long now = millis_now();
+    if (now - tx_iq_last_time_ms > TX_IQ_TIMEOUT_MS) return 0;
+    // And that there is actually data in the ring
+    return ((tx_iq_wr - tx_iq_rd) > 0);
+}
+
+int hpsdr_get_tx_iq(double *out_i, double *out_q, int max_samples)
+{
+    int rd = tx_iq_rd;
+    int avail = tx_iq_wr - rd;
+    if (avail < 0) avail = 0;
+    int n = (avail < max_samples) ? avail : max_samples;
+
+    for (int k = 0; k < n; k++) {
+        out_i[k] = tx_iq_ring_i[(rd + k) & TX_IQ_RING_MASK];
+        out_q[k] = tx_iq_ring_q[(rd + k) & TX_IQ_RING_MASK];
+    }
+    tx_iq_rd = rd + n;
+    return n;
+}
+
+// =============================================================================
+// --- Packet construction & inline transmission (unchanged) -------------------
+// =============================================================================
 
 static void build_and_send_packet(void)
 {
@@ -160,6 +240,30 @@ void hpsdr_send_iq(double *i_samples, double *q_samples, int n)
 
 // --- Command and Discovery (Background Thread) ------------------------------
 
+// Extract TX IQ audio samples from an EP2 frame.
+// Each frame has 63 audio sample slots at offsets 8..511,
+// each slot is 8 bytes: I(16-bit) Q(16-bit) + 2 padding bytes in P1 TX format.
+// SDRConsole sends TX IQ as two 16-bit signed values per slot.
+static void extract_tx_iq_from_frame(uint8_t *fp)
+{
+    for (int s = 0; s < 63; s++) {
+        uint8_t *sp = fp + 8 + s * 8;
+
+        // TX IQ in Protocol 1 EP2: Left-justified 16-bit I and Q
+        // Bytes 0-1: Left (I) sample, big-endian signed 16-bit
+        // Bytes 2-3: Right (Q) sample, big-endian signed 16-bit
+        int16_t i_raw = (int16_t)((sp[0] << 8) | sp[1]);
+        int16_t q_raw = (int16_t)((sp[2] << 8) | sp[3]);
+
+        // Normalize to ±1.0 floating point
+        double i_val = i_raw / 32768.0;
+        double q_val = q_raw / 32768.0;
+
+        // Push into the ring buffer with 48k→96k upsampling
+        tx_iq_push_48k(i_val, q_val);
+    }
+}
+
 static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender)
 {
     if (len < 4 || buf[0] != 0xEF || buf[1] != 0xFE) return;
@@ -191,6 +295,11 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender)
             stream_dest = *sender;
             tx_seq = 0;
             iq_buf_count = 0;
+            // Reset TX IQ state on new connection
+            tx_iq_wr = 0;
+            tx_iq_rd = 0;
+            tx_up_prev_i = 0.0;
+            tx_up_prev_q = 0.0;
             client_active = 1;
             printf("hpsdr: streaming STARTED to %s:%d\n", inet_ntoa(stream_dest.sin_addr), ntohs(stream_dest.sin_port));
         } else {
@@ -207,6 +316,7 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender)
 
                 int c0 = fp[3];
                 int addr = (c0 >> 1) & 0x1F;
+                int ptt = c0 & 0x01;  // bit 0 = MOX from remote app
 
                 if (addr == 0x02) { // Remote frequency set
                     int f = (fp[4] << 24) | (fp[5] << 16) | (fp[6] << 8) | fp[7];
@@ -216,6 +326,13 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender)
                         sprintf(cmd, "freq %d", f);
                         remote_execute(cmd);
                     }
+                }
+
+                // Always extract TX IQ audio samples from every EP2 frame
+                // when we are transmitting (or the remote side asserts MOX).
+                // The audio slots exist in every EP2 frame regardless of C&C address.
+                if (in_tx || ptt) {
+                    extract_tx_iq_from_frame(fp);
                 }
             }
         }
