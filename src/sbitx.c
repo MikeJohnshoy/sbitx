@@ -2435,21 +2435,14 @@ void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speake
     double filt_q[MAX_BINS / 2];
 
     if (rx_list->mode == MODE_2TONE) {
-      // 2TONE: generate clean baseband tones directly as I (real) samples.
-      // No IQ mixing needed — the tones are already at audio frequencies.
-      // Q = 0 gives a real-only signal that rx_linear() will demodulate
-      // on the correct sideband just like a normal received SSB signal.
       for (int m = 0; m < MAX_BINS / 2; m++) {
-        double tone = (vfo_read(&tone_a) + vfo_read(&tone_b))
-                      / 2147483648.0;  // normalize to ±1.0
+        double tone = (vfo_read(&tone_a) + vfo_read(&tone_b)) / 2147483648.0;
         iq_i[m] = tone;
         iq_q[m] = 0.0;
       }
-      // skip the FIR LPF — the tones are well within passband
       rx_linear(iq_i, iq_q, output_speaker, output_tx, n_samples);
 
     } else {
-      // normal RX: mix real input with complex oscillator to downconvert
       for (int m = 0; m < MAX_BINS / 2; m++) {
         double rx_sample = (1.0 * input_rx[m]) / ADC_SCALE;
 
@@ -2461,17 +2454,18 @@ void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speake
         iq_q[m] = rx_sample * (-osc_q * VFO_SCALE);
       }
 
-     // FIR low-pass filter after the mixer
-    fir_lpf_iq(iq_i, iq_q, filt_i, filt_q, MAX_BINS / 2);
-    // pass filtered I and Q data to receive pipeline
-    rx_linear(filt_i, filt_q, output_speaker, output_tx, n_samples);
+      // FIR low-pass filter after the mixer
+      fir_lpf_iq(iq_i, iq_q, filt_i, filt_q, MAX_BINS / 2);
+      // pass filtered I and Q data to receive pipeline
+      rx_linear(filt_i, filt_q, output_speaker, output_tx, n_samples);
 
-    // PROVIDE I&Q DATA TO EXTERNAL USERS
-    // THEY SHOULD CREATE THEIR OWN COPY OF THE DATA
-    // AND NEVER CHANGE THE ORIGINAL SIGNAL
-    // this example passes data being to an
-    // experimental HPSDR Protocol 1 interface
-    hpsdr_send_iq(filt_q, filt_i, MAX_BINS / 2);
+      // PROVIDE I&Q DATA TO EXTERNAL USERS
+      // THEY SHOULD CREATE THEIR OWN COPY OF THE DATA
+      // AND NEVER CHANGE THE ORIGINAL SIGNAL
+      // this example passes data being to an
+      // experimental HPSDR Protocol 1 interface
+      hpsdr_send_iq(filt_q, filt_i, MAX_BINS / 2);
+    }
   }
 
   if (pf_record) {
