@@ -2421,9 +2421,9 @@ static void fir_lpf_iq(const double *in_i, const double *in_q,
 void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speaker,
                    int32_t *output_tx, int n_samples) {
   if (in_tx) {
-   // if a remote SDR app (e.g., SDRConsole) is providing pre-processed
-    // TX IQ data, use the lightweight IQ path that preserves tx_amp/ALC
-    // but skips mic processing, compression, EQ, FFT filtering, etc.
+    // if a remote SDR app (e.g., SDRConsole) is providing pre-processed
+    // TX IQ data, use the lightweight IQ path that skips mic processing, 
+    // compression, EQ, FFT filtering, etc. but preserves tx_amp/ALC
     if (hpsdr_tx_iq_active()) {
       tx_process_iq(input_rx, input_mic, output_speaker, output_tx, n_samples);
     } else {
@@ -2441,7 +2441,7 @@ void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speake
 
     for (int m = 0; m < MAX_BINS / 2; m++) {
       double rx_sample = (1.0 * input_rx[m]) / ADC_SCALE;
-
+      
       int osc_i, osc_q;
       vfo_read_iq(&rx_osc, &osc_i, &osc_q);
 
