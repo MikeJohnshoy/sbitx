@@ -2420,18 +2420,8 @@ static void fir_lpf_iq(const double *in_i, const double *in_q,
 // called when a block of samples from the mic or rx IF is ready
 void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speaker,
                    int32_t *output_tx, int n_samples) {
-  // when MODE_2TONE is active generate a real-valued 700 Hz + 1900 Hz signal
-  if (rx_list->mode == MODE_2TONE) {
-    for (int k = 0; k < n_samples; k++) {
-      int32_t tone = (vfo_read(&tone_a) + vfo_read(&tone_b)) / 500;
-      input_rx[k] = tone;  // replace existing signal with 2TONE
-    }
-  }
 
   if (in_tx) {
-    // if a remote SDR app (e.g., SDRConsole) is providing pre-processed
-    // TX IQ data, use the lightweight IQ path that preserves tx_amp/ALC
-    // but skips mic processing, compression, EQ, FFT filtering, etc.
     if (hpsdr_tx_iq_active()) {
       tx_process_iq(input_rx, input_mic, output_speaker, output_tx, n_samples);
     } else {
@@ -2439,27 +2429,40 @@ void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speake
     }
 
   } else {
-    // mix real input with complex vfo signal to downconvert
-    // and generate I and Q data
     double iq_i[MAX_BINS / 2];
     double iq_q[MAX_BINS / 2];
     double filt_i[MAX_BINS / 2];
     double filt_q[MAX_BINS / 2];
 
-    for (int m = 0; m < MAX_BINS / 2; m++) {
-      double rx_sample = (1.0 * input_rx[m]) / ADC_SCALE;
+    if (rx_list->mode == MODE_2TONE) {
+      // 2TONE: generate clean baseband tones directly as I (real) samples.
+      // No IQ mixing needed — the tones are already at audio frequencies.
+      // Q = 0 gives a real-only signal that rx_linear() will demodulate
+      // on the correct sideband just like a normal received SSB signal.
+      for (int m = 0; m < MAX_BINS / 2; m++) {
+        double tone = (vfo_read(&tone_a) + vfo_read(&tone_b))
+                      / 2147483648.0;  // normalize to ±1.0
+        iq_i[m] = tone;
+        iq_q[m] = 0.0;
+      }
+      // skip the FIR LPF — the tones are well within passband
+      rx_linear(iq_i, iq_q, output_speaker, output_tx, n_samples);
 
-      int osc_i, osc_q;
-      vfo_read_iq(&rx_osc, &osc_i, &osc_q);
+    } else {
+      // normal RX: mix real input with complex oscillator to downconvert
+      for (int m = 0; m < MAX_BINS / 2; m++) {
+        double rx_sample = (1.0 * input_rx[m]) / ADC_SCALE;
 
-      static const double VFO_SCALE = 1.0 / 1073741824.0; // 2^30
-      iq_i[m] = rx_sample * (osc_i * VFO_SCALE);
-      iq_q[m] = rx_sample * (-osc_q * VFO_SCALE);
-    }
+        int osc_i, osc_q;
+        vfo_read_iq(&rx_osc, &osc_i, &osc_q);
 
-    // FIR low-pass filter after the mixer
+        static const double VFO_SCALE = 1.0 / 1073741824.0;
+        iq_i[m] = rx_sample * (osc_i * VFO_SCALE);
+        iq_q[m] = rx_sample * (-osc_q * VFO_SCALE);
+      }
+
+     // FIR low-pass filter after the mixer
     fir_lpf_iq(iq_i, iq_q, filt_i, filt_q, MAX_BINS / 2);
-
     // pass filtered I and Q data to receive pipeline
     rx_linear(filt_i, filt_q, output_speaker, output_tx, n_samples);
 
