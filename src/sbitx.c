@@ -2437,7 +2437,7 @@ void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speake
     if (rx_list->mode == MODE_2TONE) {
       for (int m = 0; m < MAX_BINS / 2; m++) {
         double tone = (vfo_read(&tone_a) + vfo_read(&tone_b)) / 2147483648.0;
-        iq_i[m] = tone;
+        iq_i[m] = tone * 0.0001;  // scale to a realistic received-signal level
         iq_q[m] = 0.0;
       }
       rx_linear(iq_i, iq_q, output_speaker, output_tx, n_samples);
