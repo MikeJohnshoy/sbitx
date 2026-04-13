@@ -2420,52 +2420,47 @@ static void fir_lpf_iq(const double *in_i, const double *in_q,
 // called when a block of samples from the mic or rx IF is ready
 void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speaker,
                    int32_t *output_tx, int n_samples) {
-
   if (in_tx) {
+   // if a remote SDR app (e.g., SDRConsole) is providing pre-processed
+    // TX IQ data, use the lightweight IQ path that preserves tx_amp/ALC
+    // but skips mic processing, compression, EQ, FFT filtering, etc.
     if (hpsdr_tx_iq_active()) {
       tx_process_iq(input_rx, input_mic, output_speaker, output_tx, n_samples);
     } else {
+      // tx_process continues to operate on real samples for now
       tx_process(input_rx, input_mic, output_speaker, output_tx, n_samples);
     }
 
   } else {
+    // generate I and Q data from the real input before passing samples to rx_linear()
+    // Note: this also downconverts to baseband
     double iq_i[MAX_BINS / 2];
     double iq_q[MAX_BINS / 2];
     double filt_i[MAX_BINS / 2];
     double filt_q[MAX_BINS / 2];
 
-    if (rx_list->mode == MODE_2TONE) {
-      for (int m = 0; m < MAX_BINS / 2; m++) {
-        double tone = (vfo_read(&tone_a) + vfo_read(&tone_b)) / 2147483648.0;
-        iq_i[m] = tone * 0.000000001;  // scale to a realistic received-signal level
-        iq_q[m] = 0.0;
-      }
-      rx_linear(iq_i, iq_q, output_speaker, output_tx, n_samples);
+    for (int m = 0; m < MAX_BINS / 2; m++) {
+      double rx_sample = (1.0 * input_rx[m]) / ADC_SCALE;
 
-    } else {
-      for (int m = 0; m < MAX_BINS / 2; m++) {
-        double rx_sample = (1.0 * input_rx[m]) / ADC_SCALE;
+      int osc_i, osc_q;
+      vfo_read_iq(&rx_osc, &osc_i, &osc_q);
 
-        int osc_i, osc_q;
-        vfo_read_iq(&rx_osc, &osc_i, &osc_q);
-
-        static const double VFO_SCALE = 1.0 / 1073741824.0;
-        iq_i[m] = rx_sample * (osc_i * VFO_SCALE);
-        iq_q[m] = rx_sample * (-osc_q * VFO_SCALE);
-      }
-
-      // FIR low-pass filter after the mixer
-      fir_lpf_iq(iq_i, iq_q, filt_i, filt_q, MAX_BINS / 2);
-      // pass filtered I and Q data to receive pipeline
-      rx_linear(filt_i, filt_q, output_speaker, output_tx, n_samples);
-
-      // PROVIDE I&Q DATA TO EXTERNAL USERS
-      // THEY SHOULD CREATE THEIR OWN COPY OF THE DATA
-      // AND NEVER CHANGE THE ORIGINAL SIGNAL
-      // this example passes data being to an
-      // experimental HPSDR Protocol 1 interface
-      hpsdr_send_iq(filt_q, filt_i, MAX_BINS / 2);
+      static const double VFO_SCALE = 1.0 / 1073741824.0; // 2^30
+      iq_i[m] = rx_sample * (osc_i * VFO_SCALE);
+      iq_q[m] = rx_sample * (-osc_q * VFO_SCALE);
     }
+
+    // FIR low-pass filter after the mixer
+    fir_lpf_iq(iq_i, iq_q, filt_i, filt_q, MAX_BINS / 2);
+    // pass filtered I and Q data to receive pipeline
+    rx_linear(filt_i, filt_q, output_speaker, output_tx, n_samples);
+
+    // PROVIDE I&Q DATA TO EXTERNAL USERS
+    // THEY SHOULD CREATE THEIR OWN COPY OF THE DATA
+    // AND NEVER CHANGE THE ORIGINAL SIGNAL
+    // this example passes data being to an
+    // experimental HPSDR Protocol 1 interface
+    hpsdr_send_iq(filt_q, filt_i, MAX_BINS / 2);
   }
 
   if (pf_record) {
