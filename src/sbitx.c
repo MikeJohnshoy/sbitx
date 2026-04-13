@@ -1857,7 +1857,7 @@ void read_power()
 static int tx_process_restart = 1;
 
 // ============================================================================
-// tx_process_iq() — new lightweight TX path for when we have pre-processed IQ 
+// tx_process_iq() — new lightweight TX path for when we have pre-processed IQ
 // from SDRConsole.
 // The remote app has already done all SSB generation (filtering, modulation,
 // sideband selection).  We only need to:
@@ -1868,49 +1868,47 @@ static int tx_process_restart = 1;
 //   5. Call read_power() so ALC feedback keeps working
 //   6. Update the modulation display
 // ============================================================================
-static void tx_process_iq(int32_t *input_rx, int32_t *input_mic,
-                          int32_t *output_speaker, int32_t *output_tx,
-                          int n_samples)
-{
-    double iq_i[n_samples];
-    double iq_q[n_samples];
+static void tx_process_iq(int32_t *input_rx, int32_t *input_mic, int32_t *output_speaker,
+                          int32_t *output_tx, int n_samples) {
+  double iq_i[n_samples];
+  double iq_q[n_samples];
 
-    // Fetch upsampled 96 kHz IQ from the HPSDR ring buffer
-    int got = hpsdr_get_tx_iq(iq_i, iq_q, n_samples);
+  // Fetch upsampled 96 kHz IQ from the HPSDR ring buffer
+  int got = hpsdr_get_tx_iq(iq_i, iq_q, n_samples);
 
-    // If the ring buffer didn't have enough, zero-pad the remainder
-    for (int k = got; k < n_samples; k++) {
-        iq_i[k] = 0.0;
-        iq_q[k] = 0.0;
-    }
+  // If the ring buffer didn't have enough, zero-pad the remainder
+  for (int k = got; k < n_samples; k++) {
+    iq_i[k] = 0.0;
+    iq_q[k] = 0.0;
+  }
 
-    // Scale factor: volume * tx_amp * alc_level  (same as the tail of tx_process)
-    // volume is the static double (~100.0), tx_amp is set by set_tx_power_levels(),
-    // alc_level is the ALC multiplier (0..1) maintained by read_power().
-    //
-    // The IQ from SDRConsole is normalized ±1.0.  We need to scale up to the
-    // full int32 DAC range that the codec expects (~±2 billion at full power).
-    // The factor 40000000.0 is a reasonable starting point — tune to taste.
-    #define HPSDR_TX_IQ_SCALE 40000000.0
+// Scale factor: volume * tx_amp * alc_level  (same as the tail of tx_process)
+// volume is the static double (~100.0), tx_amp is set by set_tx_power_levels(),
+// alc_level is the ALC multiplier (0..1) maintained by read_power().
+//
+// The IQ from SDRConsole is normalized ±1.0.  We need to scale up to the
+// full int32 DAC range that the codec expects (~±2 billion at full power).
+// The factor 40000000.0 is a reasonable starting point — tune to taste.
+#define HPSDR_TX_IQ_SCALE 40000000.0
 
-    float scale = HPSDR_TX_IQ_SCALE * tx_amp * alc_level;
+  float scale = HPSDR_TX_IQ_SCALE * tx_amp * alc_level;
 
-    for (int i = 0; i < n_samples; i++) {
-        // The DAC output is a real signal.  For SSB the remote app has already
-        // placed the signal on the correct sideband, so we just take the real
-        // part of the analytic signal.  (If SDRConsole sends USB, I is the
-        // real baseband; Q is the Hilbert-transformed quadrature.)
-        double sample = iq_i[i];
+  for (int i = 0; i < n_samples; i++) {
+    // The DAC output is a real signal.  For SSB the remote app has already
+    // placed the signal on the correct sideband, so we just take the real
+    // part of the analytic signal.  (If SDRConsole sends USB, I is the
+    // real baseband; Q is the Hilbert-transformed quadrature.)
+    double sample = iq_i[i];
 
-        output_tx[i] = (int32_t)(sample * scale);
-        output_speaker[i] = 0;   // mute speaker during TX
-    }
+    output_tx[i] = (int32_t)(sample * scale);
+    output_speaker[i] = 0; // mute speaker during TX
+  }
 
-    // ALC / power feedback — reads the PA bridge and adjusts alc_level
-    read_power();
+  // ALC / power feedback — reads the PA bridge and adjusts alc_level
+  read_power();
 
-    // Update the TX modulation envelope display
-    sdr_modulation_update(output_tx, n_samples, tx_amp);
+  // Update the TX modulation envelope display
+  sdr_modulation_update(output_tx, n_samples, tx_amp);
 }
 
 void tx_process(
