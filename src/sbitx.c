@@ -2027,7 +2027,7 @@ void tx_process(
 	{
 
 		if (r->mode == MODE_2TONE)
-			i_sample = (1.0 * (vfo_read(&tone_a) + vfo_read(&tone_b))) / 50000000000.0;
+			i_sample = (1.0 * input_rx[j]) / ADC_SCALE;
 		else if (r->mode == MODE_CALIBRATE)
 			i_sample = (1.0 * (vfo_read(&tone_a))) / 30000000000.0;
 		else if (r->mode == MODE_CW || r->mode == MODE_CWR || r->mode == MODE_FT8 || r->mode == MODE_FT4)
@@ -2420,6 +2420,24 @@ static void fir_lpf_iq(const double *in_i, const double *in_q,
 // called when a block of samples from the mic or rx IF is ready
 void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speaker,
                    int32_t *output_tx, int n_samples) {
+  // When MODE_2TONE is active, generate a real-valued
+  // 700 Hz + 1900 Hz signal using the existing tone_a and tone_b VFOs.
+  // The signal replaces any real off-air signal, then flows through
+  // the normal IQ mixer → LPF → rx_linear() pipeline in RX, or into
+  // tx_process() in TX.  This exercises the full DSP chain and makes
+  // the tones visible on the waterfall/spectrum.
+  //
+  // tone_a and tone_b output ±1,073,741,824 (2^30 peak).
+  // ADC_SCALE is 200,000,000, so a normalized sample of 0.01 corresponds
+  // to an input_rx value of 0.01 * 200M = 2,000,000.
+  // Dividing the VFO sum by ~500 gives a comfortable mid-range level.
+  if (rx_list->mode == MODE_2TONE) {
+    for (int k = 0; k < n_samples; k++) {
+      int32_t tone = (vfo_read(&tone_a) + vfo_read(&tone_b)) / 500;
+      input_rx[k] = tone;  // replace existing signal with 2TONE
+    }
+  }
+
   if (in_tx) {
     // If a remote SDR app (e.g., SDRConsole) is providing pre-processed
     // TX IQ data, use the lightweight IQ path that preserves tx_amp/ALC
@@ -2427,13 +2445,12 @@ void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speake
     if (hpsdr_tx_iq_active()) {
       tx_process_iq(input_rx, input_mic, output_speaker, output_tx, n_samples);
     } else {
-      // tx_process continues to operate on real samples for now
       tx_process(input_rx, input_mic, output_speaker, output_tx, n_samples);
     }
 
   } else {
-    // generate I and Q data from the real input before passing samples to rx_linear()
-    // Note: this also downconverts to baseband
+    // mix real input with complex vfo signal to downconvert
+    // and generate I and Q data
     double iq_i[MAX_BINS / 2];
     double iq_q[MAX_BINS / 2];
     double filt_i[MAX_BINS / 2];
@@ -2455,9 +2472,6 @@ void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speake
 
     // pass filtered I and Q data to receive pipeline
     rx_linear(filt_i, filt_q, output_speaker, output_tx, n_samples);
-
-    // no pass filtered I and Q data to receive pipeline
-    // rx_linear(iq_i, iq_q, output_speaker, output_tx, n_samples);
 
     // EXTERNAL USERS OF I&Q DATA GET IT HERE
     // THEY SHOULD CREATE THEIR OWN COPY OF THE DATA
