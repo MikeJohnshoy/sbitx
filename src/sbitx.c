@@ -2420,17 +2420,7 @@ static void fir_lpf_iq(const double *in_i, const double *in_q,
 // called when a block of samples from the mic or rx IF is ready
 void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speaker,
                    int32_t *output_tx, int n_samples) {
-  // When MODE_2TONE is active, generate a real-valued
-  // 700 Hz + 1900 Hz signal using the existing tone_a and tone_b VFOs.
-  // The signal replaces any real off-air signal, then flows through
-  // the normal IQ mixer → LPF → rx_linear() pipeline in RX, or into
-  // tx_process() in TX.  This exercises the full DSP chain and makes
-  // the tones visible on the waterfall/spectrum.
-  //
-  // tone_a and tone_b output ±1,073,741,824 (2^30 peak).
-  // ADC_SCALE is 200,000,000, so a normalized sample of 0.01 corresponds
-  // to an input_rx value of 0.01 * 200M = 2,000,000.
-  // Dividing the VFO sum by ~500 gives a comfortable mid-range level.
+  // when MODE_2TONE is active generate a real-valued 700 Hz + 1900 Hz signal
   if (rx_list->mode == MODE_2TONE) {
     for (int k = 0; k < n_samples; k++) {
       int32_t tone = (vfo_read(&tone_a) + vfo_read(&tone_b)) / 500;
@@ -2439,7 +2429,7 @@ void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speake
   }
 
   if (in_tx) {
-    // If a remote SDR app (e.g., SDRConsole) is providing pre-processed
+    // if a remote SDR app (e.g., SDRConsole) is providing pre-processed
     // TX IQ data, use the lightweight IQ path that preserves tx_amp/ALC
     // but skips mic processing, compression, EQ, FFT filtering, etc.
     if (hpsdr_tx_iq_active()) {
@@ -2473,10 +2463,10 @@ void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speake
     // pass filtered I and Q data to receive pipeline
     rx_linear(filt_i, filt_q, output_speaker, output_tx, n_samples);
 
-    // EXTERNAL USERS OF I&Q DATA GET IT HERE
+    // PROVIDE I&Q DATA TO EXTERNAL USERS
     // THEY SHOULD CREATE THEIR OWN COPY OF THE DATA
     // AND NEVER CHANGE THE ORIGINAL SIGNAL
-    // this is an example showing data being passed to an
+    // this example passes data being to an
     // experimental HPSDR Protocol 1 interface
     hpsdr_send_iq(filt_q, filt_i, MAX_BINS / 2);
   }
