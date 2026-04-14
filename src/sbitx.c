@@ -2421,9 +2421,9 @@ static void fir_lpf_iq(const double *in_i, const double *in_q,
 void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speaker,
                    int32_t *output_tx, int n_samples) {
   if (in_tx) {
-    // if a remote SDR app (e.g., SDRConsole) is providing pre-processed
-    // TX IQ data, use the lightweight IQ path that skips mic processing, 
-    // compression, EQ, FFT filtering, etc. but preserves tx_amp/ALC
+    // if a remote SDR app (e.g., SDRConsole) can provide baseband TX IQ data we can
+	  // skip mic processing, compression, EQ, FFT filtering and sideband selection,
+    // and just do final gain and ALC
     if (hpsdr_tx_iq_active()) {
       tx_process_iq(input_rx, input_mic, output_speaker, output_tx, n_samples);
     } else {
@@ -2432,8 +2432,8 @@ void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speake
     }
 
   } else {
-    // generate I and Q data from the real input before passing samples to rx_linear()
-    // Note: this also downconverts to baseband
+    // take samples out of second IF and downconvert to baseband using two oscillators
+    // passing I and Q samples to rx_linear()
     double iq_i[MAX_BINS / 2];
     double iq_q[MAX_BINS / 2];
     double filt_i[MAX_BINS / 2];
