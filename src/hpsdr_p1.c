@@ -25,6 +25,7 @@ static volatile int client_active = 0;
 static volatile int running = 0;
 static uint32_t tx_seq = 0;
 static pthread_t poll_thread;
+static volatile int remote_mox = 0;
 
 // IQ accumulation buffer for 126 samples (48kHz)
 static double iq_buf_i[SAMPLES_PER_PACKET];
@@ -327,12 +328,19 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
       tx_iq_rd = 0;
       tx_up_prev_i = 0.0;
       tx_up_prev_q = 0.0;
+      remote_mox = 0;  // Reset MOX state on new connection
       client_active = 1;
       printf("hpsdr: streaming STARTED to %s:%d\n", inet_ntoa(stream_dest.sin_addr),
              ntohs(stream_dest.sin_port));
     } else {
       client_active = 0;
       printf("hpsdr: streaming STOPPED\n");
+      
+      // Safety catch: If the client disconnected while transmitting, turn it off
+      if (remote_mox) {
+          remote_mox = 0;
+          g_idle_add(hpsdr_tx_off_idle, NULL);
+      }
     }
     break;
 
@@ -348,7 +356,6 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
         int ptt = c0 & 0x01; // bit 0 = MOX from remote app
 
         // Track remote MOX state and trigger T/R switch (from every frame)
-        static int remote_mox = 0;
         if (ptt != remote_mox) {
             remote_mox = ptt;
             printf("hpsdr: remote MOX %s\n", remote_mox ? "ON" : "OFF");
