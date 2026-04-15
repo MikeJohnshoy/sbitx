@@ -77,6 +77,12 @@ static volatile int tx_iq_rd = 0; // read by audio thread
 #define TX_IQ_TIMEOUT_MS 500
 static volatile unsigned long tx_iq_last_time_ms = 0;
 
+// Watchdog: timestamp of the last EP2 packet received from the remote app.
+// Updated on every EP2 packet, regardless of MOX state.
+// If we are in TX and this goes stale, the watchdog fires tx_off().
+#define EP2_WATCHDOG_MS 500  // 0.5 second with no EP2 → force RX
+static volatile unsigned long ep2_last_time_ms = 0;
+
 // Previous sample for the 2× interpolation filter
 static double tx_up_prev_i = 0.0;
 static double tx_up_prev_q = 0.0;
@@ -136,6 +142,37 @@ int hpsdr_get_tx_iq(double *out_i, double *out_q, int max_samples) {
   }
   tx_iq_rd = rd + n;
   return n;
+}
+
+// =============================================================================
+// --- Watchdog ----------------------------------------------------------------
+// Called every 250 ms from the GTK main loop via g_timeout_add().
+// If the radio is in TX but no EP2 packets have arrived recently,
+// the remote app has gone away — force back to receive.
+// =============================================================================
+
+static gboolean hpsdr_watchdog(gpointer data) {
+  (void)data;
+
+  if (!running)
+    return G_SOURCE_REMOVE; // stop the timer if hpsdr has been shut down
+
+  if (in_tx && client_active) {
+    unsigned long now = millis_now();
+    if (now - ep2_last_time_ms > EP2_WATCHDOG_MS) {
+      printf("hpsdr watchdog: no EP2 for >%d ms while in TX — forcing RX\n",
+             EP2_WATCHDOG_MS);
+      remote_mox = 0;
+      // Reset ring so stale IQ doesn't keep hpsdr_tx_iq_active() true
+      tx_iq_wr = 0;
+      tx_iq_rd = 0;
+      tx_up_prev_i = 0.0;
+      tx_up_prev_q = 0.0;
+      tx_off();
+    }
+  }
+
+  return G_SOURCE_CONTINUE; // keep firing
 }
 
 // =============================================================================
@@ -329,6 +366,7 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
       tx_up_prev_i = 0.0;
       tx_up_prev_q = 0.0;
       remote_mox = 0;  // Reset MOX state on new connection
+      ep2_last_time_ms = millis_now(); // Seed watchdog so it doesn't fire immediately
       client_active = 1;
       printf("hpsdr: streaming STARTED to %s:%d\n", inet_ntoa(stream_dest.sin_addr),
              ntohs(stream_dest.sin_port));
@@ -346,6 +384,9 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
 
   case 0x01: // EP2 host commands
     if (len >= HPSDR_PKT_SIZE) {
+      // Stamp the watchdog on every EP2 packet received
+      ep2_last_time_ms = millis_now();
+        
       for (int frame = 0; frame < 2; frame++) {
         uint8_t *fp = buf + 8 + frame * 512;
         if (fp[0] != 0x7F || fp[1] != 0x7F || fp[2] != 0x7F)
@@ -394,70 +435,5 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
       }
     }
     break;
-  }
-}
-
-static void *hpsdr_poll_thread(void *arg) {
-  uint8_t buf[2048];
-  struct sockaddr_in sender;
-  socklen_t sender_len;
-
-  while (running) {
-    sender_len = sizeof(sender);
-    int n = recvfrom(hpsdr_sock, buf, sizeof(buf), 0, (struct sockaddr *)&sender, &sender_len);
-    if (n > 0) {
-      handle_command(buf, n, &sender);
-    }
-  }
-  return NULL;
-}
-
-// --- Initialization API -----------------------------------------------------
-
-int hpsdr_init(void) {
-  hpsdr_sock = socket(AF_INET, SOCK_DGRAM, 0);
-  if (hpsdr_sock < 0)
-    return -1;
-
-  int optval = 1;
-  setsockopt(hpsdr_sock, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
-  setsockopt(hpsdr_sock, SOL_SOCKET, SO_BROADCAST, &optval, sizeof(optval));
-
-  struct sockaddr_in addr;
-  memset(&addr, 0, sizeof(addr));
-  addr.sin_family = AF_INET;
-  addr.sin_port = htons(HPSDR_PORT);
-  addr.sin_addr.s_addr = htonl(INADDR_ANY);
-
-  if (bind(hpsdr_sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-    close(hpsdr_sock);
-    hpsdr_sock = -1;
-    return -1;
-  }
-
-  struct timeval tv = {.tv_sec = 0, .tv_usec = 200000};
-  setsockopt(hpsdr_sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
-  running = 1;
-  return 0;
-}
-
-void hpsdr_stop(void) {
-  running = 0;
-  client_active = 0;
-
-  if (hpsdr_sock >= 0) {
-    close(hpsdr_sock);
-    hpsdr_sock = -1;
-  }
-}
-
-int hpsdr_is_connected(void) { return client_active; }
-
-void hpsdr_poll(void) {
-  static int started = 0;
-  if (!started && running) {
-    pthread_create(&poll_thread, NULL, hpsdr_poll_thread, NULL);
-    started = 1;
   }
 }
