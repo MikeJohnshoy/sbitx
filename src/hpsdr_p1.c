@@ -13,6 +13,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <gtk/gtk.h>
 
 #define HPSDR_PORT 1024
 #define HPSDR_PKT_SIZE 1032
@@ -39,6 +40,23 @@ extern void remote_execute(char *command);
 extern int freq_hdr;
 extern int in_tx;
 extern void tr_switch(int tx_on);
+extern void tx_on(int trigger);
+extern void tx_off(void);
+#define TX_SOFT 2
+
+static gboolean hpsdr_tx_on_idle(gpointer data) {
+    (void)data;
+    if (!in_tx)
+        tx_on(TX_SOFT);
+    return G_SOURCE_REMOVE;  // one-shot
+}
+
+static gboolean hpsdr_tx_off_idle(gpointer data) {
+    (void)data;
+    if (in_tx)
+        tx_off();
+    return G_SOURCE_REMOVE;  // one-shot
+}
 
 // =============================================================================
 // TX IQ ring buffer — receives 48kHz IQ from remote SDR client,
@@ -331,16 +349,22 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
         // Track remote MOX state and trigger T/R switch (from every frame)
         static int remote_mox = 0;
         if (addr == 0 && ptt != remote_mox) {
-          remote_mox = ptt;
-          printf("hpsdr: remote MOX %s\n", remote_mox ? "ON" : "OFF");
-          // Use cmd_exec-style commands — these get picked up by the GTK main loop
-          remote_execute(remote_mox ? "t" : "r");
-          if (!remote_mox) {
-            tx_iq_wr = 0;
-            tx_iq_rd = 0;
-            tx_up_prev_i = 0.0;
-            tx_up_prev_q = 0.0;
-          }
+            remote_mox = ptt;
+            printf("hpsdr: remote MOX %s\n", remote_mox ? "ON" : "OFF");
+        
+            // Schedule TX/RX switch on the GTK main thread — bypasses the
+            // command queue (can't overflow) and bypasses cw_poll() fighting us
+            if (remote_mox)
+                g_idle_add(hpsdr_tx_on_idle, NULL);
+            else
+                g_idle_add(hpsdr_tx_off_idle, NULL);
+        
+            if (!remote_mox) {
+                tx_iq_wr = 0;
+                tx_iq_rd = 0;
+                tx_up_prev_i = 0.0;
+                tx_up_prev_q = 0.0;
+            }
         }
 
         if (addr == 0x02) { // Remote frequency set
