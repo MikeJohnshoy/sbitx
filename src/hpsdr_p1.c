@@ -53,9 +53,10 @@ static gboolean hpsdr_tx_on_idle(gpointer data) {
 
 static gboolean hpsdr_tx_off_idle(gpointer data) {
     (void)data;
-    if (in_tx)
-        tx_off();
-    return G_SOURCE_REMOVE;  // one-shot
+    printf("hpsdr_tx_off_idle: in_tx=%d (extern)\n", in_tx);
+    tx_off();
+    printf("hpsdr_tx_off_idle: after tx_off, in_tx=%d (extern)\n", in_tx);
+    return G_SOURCE_REMOVE;
 }
 
 // =============================================================================
