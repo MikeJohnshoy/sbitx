@@ -334,8 +334,7 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
           remote_mox = ptt;
           printf("hpsdr: remote MOX %s\n", remote_mox ? "ON" : "OFF");
           // Use cmd_exec-style commands — these get picked up by the GTK main loop
-          // which properly calls tx_on()/tx_off() → sdr_request("tx=on"/"tx=off") → tr_switch()
-          remote_execute(remote_mox ? "TX" : "RX");
+          remote_execute(remote_mox ? "t" : "r");
           if (!remote_mox) {
             tx_iq_wr = 0;
             tx_iq_rd = 0;
