@@ -385,11 +385,11 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
           }
         }
 
-        // Always extract TX IQ audio samples from every EP2 frame
-        // when we are transmitting (or the remote side asserts MOX).
-        // The audio slots exist in every EP2 frame regardless of C&C address.
-        if (in_tx || remote_mox) {
-          extract_tx_iq_from_frame(fp);
+        // Only extract TX IQ if *remote* side is actively asserting MOX.
+        // Do NOT use `in_tx` here — it lags behind because tx_off() runs
+        // asynchronously on the GTK main thread.
+        if (remote_mox) {
+            extract_tx_iq_from_frame(fp);
         }
       }
     }
