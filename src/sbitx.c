@@ -2730,6 +2730,7 @@ void tr_switch_v2(int tx_on) {
 
 // transmit-receive switch for both sbitx DE and V2 and newer
 void tr_switch(int tx_on) {
+  printf("tr_switch(%d) called, in_tx was %d\n", tx_on, in_tx);   // DEBUG
   if (tx_on) {                   // switch to transmit
     in_tx = 1;                   // set first so audio thread stops rx_linear()
     tx_process_restart = 1;      // reset FFT state on first tx_process call
