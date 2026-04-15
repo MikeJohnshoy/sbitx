@@ -38,6 +38,7 @@ static double last_q = 0.0;
 extern void remote_execute(char *command);
 extern int freq_hdr;
 extern int in_tx;
+extern void tr_switch(int tx_on);
 
 // =============================================================================
 // TX IQ ring buffer — receives 48kHz IQ from remote SDR client,
@@ -336,6 +337,7 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
             char cmd[20];
             sprintf(cmd, "tx %s", new_mox ? "on" : "off");
             remote_execute(cmd);
+            tr_switch(new_mox);
             printf("hpsdr: remote MOX %s\n", new_mox ? "ON" : "OFF");
           }
         }
