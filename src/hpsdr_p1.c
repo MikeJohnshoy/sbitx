@@ -444,11 +444,60 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
   }
 }
 
-void hpsdr_poll(void) {
-  static int started = 0;
-  if (!started && running) {
-    pthread_create(&poll_thread, NULL, hpsdr_poll_thread, NULL);
-    g_timeout_add(250, hpsdr_watchdog, NULL); // fire every 250 ms on GTK thread
-    started = 1;
+static void *hpsdr_poll_thread(void *arg) {
+  (void)arg;
+  uint8_t buf[2048];
+  struct sockaddr_in sender;
+  socklen_t sender_len;
+
+  while (running) {
+    sender_len = sizeof(sender);
+    int n = recvfrom(hpsdr_sock, buf, sizeof(buf), 0, (struct sockaddr *)&sender, &sender_len);
+    if (n > 0) {
+      handle_command(buf, n, &sender);
+    }
+  }
+  return NULL;
+}
+
+// --- Initialization API -----------------------------------------------------
+
+int hpsdr_init(void) {
+  hpsdr_sock = socket(AF_INET, SOCK_DGRAM, 0);
+  if (hpsdr_sock < 0)
+    return -1;
+
+  int optval = 1;
+  setsockopt(hpsdr_sock, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
+  setsockopt(hpsdr_sock, SOL_SOCKET, SO_BROADCAST, &optval, sizeof(optval));
+
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(HPSDR_PORT);
+  addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+  if (bind(hpsdr_sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+    close(hpsdr_sock);
+    hpsdr_sock = -1;
+    return -1;
+  }
+
+  struct timeval tv = {.tv_sec = 0, .tv_usec = 200000};
+  setsockopt(hpsdr_sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+  running = 1;
+  return 0;
+}
+
+void hpsdr_stop(void) {
+  running = 0;
+  client_active = 0;
+
+  if (hpsdr_sock >= 0) {
+    close(hpsdr_sock);
+    hpsdr_sock = -1;
   }
 }
+
+int hpsdr_is_connected(void) { return client_active; }
