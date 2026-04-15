@@ -348,7 +348,7 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
 
         // Track remote MOX state and trigger T/R switch (from every frame)
         static int remote_mox = 0;
-        if (addr == 0 && ptt != remote_mox) {
+        if (ptt != remote_mox) {
             remote_mox = ptt;
             printf("hpsdr: remote MOX %s\n", remote_mox ? "ON" : "OFF");
         
