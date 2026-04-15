@@ -2436,7 +2436,7 @@ void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speake
     // pass filtered I and Q data to receive pipeline
     rx_linear(filt_i, filt_q, output_speaker, output_tx, n_samples);
 
-    // PROVIDE I&Q DATA TO EXTERNAL USERS
+    // PROVIDE RECEIVE I&Q DATA TO EXTERNAL USERS
     // THEY SHOULD CREATE THEIR OWN COPY OF THE DATA
     // AND NEVER CHANGE THE ORIGINAL SIGNAL
     // this example passes data being to an
