@@ -501,3 +501,13 @@ void hpsdr_stop(void) {
 }
 
 int hpsdr_is_connected(void) { return client_active; }
+
+
+void hpsdr_poll(void) {
+  static int started = 0;
+  if (!started && running) {
+    pthread_create(&poll_thread, NULL, hpsdr_poll_thread, NULL);
+    g_timeout_add(250, hpsdr_watchdog, NULL); // fire every 250 ms on GTK thread
+    started = 1;
+  }
+}
