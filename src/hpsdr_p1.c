@@ -155,26 +155,32 @@ static gboolean hpsdr_watchdog(gpointer data) {
   (void)data;
 
   if (!running)
-    return G_SOURCE_REMOVE; // stop the timer if hpsdr has been shut down
+    return G_SOURCE_REMOVE;
 
-  if (in_tx && client_active) {
-    unsigned long now = millis_now();
-    if (now - ep2_last_time_ms > EP2_WATCHDOG_MS) {
-      printf("hpsdr watchdog: no EP2 for >%d ms while in TX — forcing RX\n",
-             EP2_WATCHDOG_MS);
-      remote_mox = 0;
-      // Reset ring so stale IQ doesn't keep hpsdr_tx_iq_active() true
-      tx_iq_wr = 0;
-      tx_iq_rd = 0;
-      tx_up_prev_i = 0.0;
-      tx_up_prev_q = 0.0;
-      tx_off();
-    }
+  // If sBitx is stuck in TX but the remote is no longer asserting MOX,
+  // force it back to RX.
+  if (in_tx && !remote_mox) {
+    printf("hpsdr watchdog: in_tx but remote_mox=0 — forcing RX\n");
+    tx_iq_wr = 0;
+    tx_iq_rd = 0;
+    tx_up_prev_i = 0.0;
+    tx_up_prev_q = 0.0;
+    tx_off();
   }
 
-  return G_SOURCE_CONTINUE; // keep firing
-}
+  // Separate check: remote app has completely disappeared while transmitting
+  if (in_tx && client_active && (millis_now() - ep2_last_time_ms > EP2_WATCHDOG_MS)) {
+    printf("hpsdr watchdog: no EP2 for >%d ms while in TX — forcing RX\n", EP2_WATCHDOG_MS);
+    remote_mox = 0;
+    tx_iq_wr = 0;
+    tx_iq_rd = 0;
+    tx_up_prev_i = 0.0;
+    tx_up_prev_q = 0.0;
+    tx_off();
+  }
 
+  return G_SOURCE_CONTINUE;
+}
 // =============================================================================
 // --- Packet construction & inline transmission (unchanged) -------------------
 // =============================================================================
