@@ -328,18 +328,21 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
         int addr = (c0 >> 1) & 0x1F;
         int ptt = c0 & 0x01; // bit 0 = MOX from remote app
 
-        // Track remote MOX state and trigger T/R switch
+        // Track remote MOX state and trigger T/R switch (from every frame)
         static int remote_mox = 0;
-        if (addr == 0x00) { // C0 address 0 carries MOX in bit 0
-          int new_mox = (c0 & 0x01);
-          if (new_mox != remote_mox) {
-            remote_mox = new_mox;
-            char cmd[20];
-            sprintf(cmd, "%s", new_mox ? "tx" : "rx");
-            remote_execute(cmd);
-            tr_switch(new_mox);
-            printf("hpsdr: remote MOX %s\n", new_mox ? "ON" : "OFF");
+        if (ptt != remote_mox) {
+          remote_mox = ptt;
+          remote_execute(remote_mox ? "tx" : "rx");
+          tr_switch(remote_mox);
+        
+          if (!remote_mox) {
+            tx_iq_wr = 0;
+            tx_iq_rd = 0;
+            tx_up_prev_i = 0.0;
+            tx_up_prev_q = 0.0;
           }
+        
+          printf("hpsdr: remote MOX %s\n", remote_mox ? "ON" : "OFF");
         }
         if (addr == 0x02) { // Remote frequency set
           int f = (fp[4] << 24) | (fp[5] << 16) | (fp[6] << 8) | fp[7];
@@ -354,7 +357,7 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
         // Always extract TX IQ audio samples from every EP2 frame
         // when we are transmitting (or the remote side asserts MOX).
         // The audio slots exist in every EP2 frame regardless of C&C address.
-        if (in_tx || ptt) {
+        if (in_tx || remote_mox) {
           extract_tx_iq_from_frame(fp);
         }
       }
