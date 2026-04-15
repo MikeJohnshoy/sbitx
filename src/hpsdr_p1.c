@@ -332,6 +332,7 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
         static int remote_mox = 0;
         if (ptt != remote_mox) {
           remote_mox = ptt;
+          printf("hpsdr: ptt=%d, calling tr_switch(%d)\n", ptt, remote_mox);  // DEBUG
           remote_execute(remote_mox ? "tx" : "rx");
           tr_switch(remote_mox);
         
