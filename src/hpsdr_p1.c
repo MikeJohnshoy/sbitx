@@ -332,19 +332,18 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
         static int remote_mox = 0;
         if (ptt != remote_mox) {
           remote_mox = ptt;
-          printf("hpsdr: ptt=%d, calling tr_switch(%d)\n", ptt, remote_mox);  // DEBUG
-          remote_execute(remote_mox ? "tx" : "rx");
-          tr_switch(remote_mox);
-        
+          printf("hpsdr: remote MOX %s\n", remote_mox ? "ON" : "OFF");
+          // Use cmd_exec-style commands — these get picked up by the GTK main loop
+          // which properly calls tx_on()/tx_off() → sdr_request("tx=on"/"tx=off") → tr_switch()
+          remote_execute(remote_mox ? "TX" : "RX");
           if (!remote_mox) {
             tx_iq_wr = 0;
             tx_iq_rd = 0;
             tx_up_prev_i = 0.0;
             tx_up_prev_q = 0.0;
           }
-        
-          printf("hpsdr: remote MOX %s\n", remote_mox ? "ON" : "OFF");
         }
+
         if (addr == 0x02) { // Remote frequency set
           int f = (fp[4] << 24) | (fp[5] << 16) | (fp[6] << 8) | fp[7];
           if (f > 0 && f != freq_hdr) {
