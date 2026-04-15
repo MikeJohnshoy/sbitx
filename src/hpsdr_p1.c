@@ -335,9 +335,8 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
           if (new_mox != remote_mox) {
             remote_mox = new_mox;
             char cmd[20];
-            sprintf(cmd, "tx %s", new_mox ? "on" : "off");
+            sprintf(cmd, "%s", new_mox ? "tx" : "rx");
             remote_execute(cmd);
-            tr_switch(new_mox);
             printf("hpsdr: remote MOX %s\n", new_mox ? "ON" : "OFF");
           }
         }
