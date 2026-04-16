@@ -382,10 +382,10 @@ static void extract_tx_iq_from_frame(uint8_t *fp) {
   for (int s = 0; s < 63; s++) {
     uint8_t *sp = fp + 8 + s * 8;
 
-    int16_t i_raw = (int16_t)((sp[0] << 8) | sp[1]);
-    int16_t q_raw = (int16_t)((sp[2] << 8) | sp[3]);
+    // TX IQ is at bytes 4-5 (I) and 6-7 (Q) — NOT bytes 0-3 (mic audio)
+    int16_t i_raw = (int16_t)((sp[4] << 8) | sp[5]);
+    int16_t q_raw = (int16_t)((sp[6] << 8) | sp[7]);
 
-    // DEBUG CODE — print first slot of every frame so we can see what's arriving
     if (s == 0)
       printf("hpsdr EP2 IQ: i_raw=%d q_raw=%d\n", i_raw, q_raw);
 
@@ -398,6 +398,7 @@ static void extract_tx_iq_from_frame(uint8_t *fp) {
     tx_iq_push_48k(i_val, q_val);
   }
 }
+
 static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
   if (len < 4 || buf[0] != 0xEF || buf[1] != 0xFE)
     return;
