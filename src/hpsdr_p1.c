@@ -449,6 +449,7 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
              ntohs(stream_dest.sin_port));
     } else {
       client_active = 0;
+      remote_mox = 0;
       printf("hpsdr: streaming STOPPED\n");
 
       // Safety catch: If the client disconnected while transmitting, turn it off
