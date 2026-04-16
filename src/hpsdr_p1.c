@@ -115,7 +115,7 @@ static volatile int hpsdr_tx_data_active = 0;
 // Watchdog: timestamp of the last EP2 packet received from the remote app.
 // Updated on every EP2 packet, regardless of MOX state.
 // If we are in TX and this goes stale, the watchdog fires tx_off().
-#define EP2_WATCHDOG_MS 2000
+#define EP2_WATCHDOG_MS 10000  // only for crash/disconnect
 
 // Previous sample for the 2× interpolation filter
 static double tx_up_prev_i = 0.0;
@@ -210,7 +210,7 @@ static gboolean hpsdr_watchdog(gpointer data) {
   if (!running) return G_SOURCE_REMOVE;
 
   if (in_tx && (millis_now() - ep2_last_time_ms > EP2_WATCHDOG_MS)) {
-    printf("hpsdr watchdog: no EP2 for >%dms — forcing RX\n", EP2_WATCHDOG_MS);
+    printf("hpsdr watchdog: no EP2 for >%dms — client probably crashed, forcing RX\n", EP2_WATCHDOG_MS);
     remote_mox = 0;
     hpsdr_tx_data_active = 0;
     tx_iq_wr = 0;
