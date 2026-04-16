@@ -127,11 +127,6 @@ static unsigned long millis_now(void) {
 // Write one 48 kHz sample pair into the ring as two 96 kHz samples
 // using linear interpolation (simple half-band upsample).
 static void tx_iq_push_48k(double i_val, double q_val) {
-  // Ignore near-zero samples — SDR Console sends zeroed EP2 frames
-  // at connection time before the user keys TX.  Without this gate,
-  // the first burst of silence would falsely trigger transmit.
-  if ((i_val * i_val + q_val * q_val) < 1e-6)
-    return;
   // Interpolated mid-point sample (insert between previous and current)
   double mid_i = 0.5 * (tx_up_prev_i + i_val);
   double mid_q = 0.5 * (tx_up_prev_q + q_val);
@@ -385,17 +380,18 @@ static void extract_tx_iq_from_frame(uint8_t *fp) {
   for (int s = 0; s < 63; s++) {
     uint8_t *sp = fp + 8 + s * 8;
 
-    // TX IQ in Protocol 1 EP2: Left-justified 16-bit I and Q
-    // Bytes 0-1: Left (I) sample, big-endian signed 16-bit
-    // Bytes 2-3: Right (Q) sample, big-endian signed 16-bit
     int16_t i_raw = (int16_t)((sp[0] << 8) | sp[1]);
     int16_t q_raw = (int16_t)((sp[2] << 8) | sp[3]);
 
-    // Normalize to ±1.0 floating point
+    // Skip truly zero slots — sent by SDR Console during connect-time
+    // silence before the user presses TX.  Any real audio will have at
+    // least one non-zero bit in either I or Q.
+    if (i_raw == 0 && q_raw == 0)
+      continue;
+
     double i_val = i_raw / 32768.0;
     double q_val = q_raw / 32768.0;
 
-    // Push into the ring buffer with 48k→96k upsampling
     tx_iq_push_48k(i_val, q_val);
   }
 }
