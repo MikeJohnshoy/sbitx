@@ -465,8 +465,9 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
 
         int c0 = fp[3];
         int addr = (c0 >> 1) & 0x1F;
+        int mox = c0 & 0x01;   // ← MOX bit from SDR Console
 
-        if (addr == 0x02) { // Remote frequency set
+        if (addr == 0x02) {
           int f = (fp[4] << 24) | (fp[5] << 16) | (fp[6] << 8) | fp[7];
           if (f > 0 && f != freq_hdr) {
             printf("hpsdr: remote set freq %d Hz\n", f);
@@ -476,7 +477,10 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
           }
         }
 
-        extract_tx_iq_from_frame(fp);
+        // Only push IQ into the ring when SDR Console has MOX set.
+        // This prevents connect-time noise from falsely triggering TX.
+        if (mox)
+          extract_tx_iq_from_frame(fp);
       }
     }
     break;
