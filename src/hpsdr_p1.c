@@ -54,6 +54,8 @@ extern int in_tx;
 extern void tr_switch(int tx_on);
 extern void tx_on(int trigger);
 extern void tx_off(void);
+static volatile int remote_mox = 0;
+static volatile unsigned long ep2_last_time_ms = 0;
 #define TX_SOFT 2
 
 // =============================================================================
@@ -204,11 +206,11 @@ int hpsdr_get_tx_iq(double *out_i, double *out_q, int max_samples) {
 
 static gboolean hpsdr_watchdog(gpointer data) {
   (void)data;
-  if (!running)
-    return G_SOURCE_REMOVE;
+  if (!running) return G_SOURCE_REMOVE;
 
-  if (hpsdr_tx_data_active && (millis_now() - tx_iq_last_time_ms > 500)) {
-    printf("hpsdr watchdog: IQ data gone >500ms — forcing RX\n");
+  if (in_tx && (millis_now() - ep2_last_time_ms > 500)) {
+    printf("hpsdr watchdog: no EP2 for >500ms — forcing RX\n");
+    remote_mox = 0;
     hpsdr_tx_data_active = 0;
     tx_iq_wr = 0;
     tx_iq_rd = 0;
@@ -441,6 +443,8 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
       tx_up_prev_q = 0.0;
       hpsdr_tx_data_active = 0; // reset data-driven TX state on new connection
       client_active = 1;
+      remote_mox = 0;
+      ep2_last_time_ms = millis_now(); // don't let watchdog fire immediately
       printf("hpsdr: streaming STARTED to %s:%d\n", inet_ntoa(stream_dest.sin_addr),
              ntohs(stream_dest.sin_port));
     } else {
@@ -458,6 +462,9 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
   case 0x01: // EP2 host commands
     if (!client_active) break;
     if (len >= HPSDR_PKT_SIZE) {
+
+      ep2_last_time_ms = millis_now(); // feed watchdog on every EP2 packet
+
       for (int frame = 0; frame < 2; frame++) {
         uint8_t *fp = buf + 8 + frame * 512;
         if (fp[0] != 0x7F || fp[1] != 0x7F || fp[2] != 0x7F)
@@ -465,7 +472,22 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
 
         int c0 = fp[3];
         int addr = (c0 >> 1) & 0x1F;
-        int mox = c0 & 0x01;   // ← MOX bit from SDR Console
+        int mox = c0 & 0x01;
+
+        // MOX transition — edge triggered TX on/off
+        if (mox != remote_mox) {
+          remote_mox = mox;
+          printf("hpsdr: MOX %s\n", mox ? "ON" : "OFF");
+          if (mox) {
+            hpsdr_tx_data_active = 1;
+            g_idle_add(hpsdr_tx_on_idle, NULL);
+          } else {
+            hpsdr_tx_data_active = 0;
+            tx_iq_wr = 0;
+            tx_iq_rd = 0;
+            g_idle_add(hpsdr_tx_off_idle, NULL);
+          }
+        }
 
         if (addr == 0x02) {
           int f = (fp[4] << 24) | (fp[5] << 16) | (fp[6] << 8) | fp[7];
@@ -477,12 +499,8 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
           }
         }
 
-        // Only push IQ into the ring when SDR Console has MOX set.
-        // This prevents connect-time noise from falsely triggering TX.
-        if (mox) {
-          tx_iq_last_time_ms = millis_now();  // keep watchdog fed while MOX is set
+        if (mox)
           extract_tx_iq_from_frame(fp);
-        }
       }
     }
     break;
