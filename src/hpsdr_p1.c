@@ -475,6 +475,7 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
         int c0 = fp[3];
         int addr = (c0 >> 1) & 0x1F;
         int mox = c0 & 0x01;
+        printf("hpsdr: frame %d c0=0x%02x addr=0x%02x mox=%d\n", frame, c0, addr, mox);
 
         // MOX transition — edge triggered TX on/off
         if (mox != remote_mox) {
