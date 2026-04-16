@@ -147,6 +147,8 @@ static void tx_iq_push_48k(double i_val, double q_val) {
   tx_iq_last_time_ms = millis_now();
   if (!hpsdr_tx_data_active) {
     hpsdr_tx_data_active = 1;
+    // DEBUG CODE
+    printf("hpsdr: first non-zero IQ — triggering TX (i=%.6f q=%.6f)\n", i_val, q_val);
     g_idle_add(hpsdr_tx_on_idle, NULL);
   }
 }
@@ -383,9 +385,10 @@ static void extract_tx_iq_from_frame(uint8_t *fp) {
     int16_t i_raw = (int16_t)((sp[0] << 8) | sp[1]);
     int16_t q_raw = (int16_t)((sp[2] << 8) | sp[3]);
 
-    // Skip truly zero slots — sent by SDR Console during connect-time
-    // silence before the user presses TX.  Any real audio will have at
-    // least one non-zero bit in either I or Q.
+    // DEBUG CODE — print first slot of every frame so we can see what's arriving
+    if (s == 0)
+      printf("hpsdr EP2 IQ: i_raw=%d q_raw=%d\n", i_raw, q_raw);
+
     if (i_raw == 0 && q_raw == 0)
       continue;
 
@@ -395,7 +398,6 @@ static void extract_tx_iq_from_frame(uint8_t *fp) {
     tx_iq_push_48k(i_val, q_val);
   }
 }
-
 static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
   if (len < 4 || buf[0] != 0xEF || buf[1] != 0xFE)
     return;
