@@ -127,6 +127,11 @@ static unsigned long millis_now(void) {
 // Write one 48 kHz sample pair into the ring as two 96 kHz samples
 // using linear interpolation (simple half-band upsample).
 static void tx_iq_push_48k(double i_val, double q_val) {
+  // Ignore near-zero samples — SDR Console sends zeroed EP2 frames
+  // at connection time before the user keys TX.  Without this gate,
+  // the first burst of silence would falsely trigger transmit.
+  if ((i_val * i_val + q_val * q_val) < 1e-6)
+    return;
   // Interpolated mid-point sample (insert between previous and current)
   double mid_i = 0.5 * (tx_up_prev_i + i_val);
   double mid_q = 0.5 * (tx_up_prev_q + q_val);
@@ -452,6 +457,7 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     break;
 
   case 0x01: // EP2 host commands
+    if (!client_active) break;
     if (len >= HPSDR_PKT_SIZE) {
       for (int frame = 0; frame < 2; frame++) {
         uint8_t *fp = buf + 8 + frame * 512;
