@@ -115,7 +115,7 @@ static volatile int hpsdr_tx_data_active = 0;
 // Watchdog: timestamp of the last EP2 packet received from the remote app.
 // Updated on every EP2 packet, regardless of MOX state.
 // If we are in TX and this goes stale, the watchdog fires tx_off().
-#define EP2_WATCHDOG_MS 10000  // only for crash/disconnect
+#define EP2_WATCHDOG_MS 3500  // only for crash/disconnect
 
 // Previous sample for the 2× interpolation filter
 static double tx_up_prev_i = 0.0;
