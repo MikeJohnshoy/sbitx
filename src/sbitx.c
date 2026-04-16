@@ -2403,12 +2403,12 @@ void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speake
                    int32_t *output_tx, int n_samples) {
   if (in_tx) {
     // if a remote SDR app (e.g., SDRConsole) can provide baseband TX IQ data we can
-	  // skip mic processing, compression, EQ, FFT filtering and sideband selection,
+    // skip mic processing, compression, EQ, FFT filtering and sideband selection,
     // and just do final gain and ALC
     if (hpsdr_tx_iq_active()) {
       tx_process_iq(input_rx, input_mic, output_speaker, output_tx, n_samples);
     } else {
-      // tx_process continues to operate on real samples for now
+      // tx_process continues to operate in the usual sBitx way
       tx_process(input_rx, input_mic, output_speaker, output_tx, n_samples);
     }
 
