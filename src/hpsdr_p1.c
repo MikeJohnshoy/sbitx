@@ -25,7 +25,6 @@ static volatile int client_active = 0;
 static volatile int running = 0;
 static uint32_t tx_seq = 0;
 static pthread_t poll_thread;
-static volatile int remote_mox = 0;
 
 // IQ accumulation buffer for 126 samples (48kHz)
 static double iq_buf_i[SAMPLES_PER_PACKET];
@@ -76,12 +75,12 @@ static volatile int tx_iq_rd = 0; // read by audio thread
 // Timeout: if no TX IQ arrives for this many ms, declare inactive
 #define TX_IQ_TIMEOUT_MS 500
 static volatile unsigned long tx_iq_last_time_ms = 0;
+static volatile int hpsdr_tx_data_active = 0;
 
 // Watchdog: timestamp of the last EP2 packet received from the remote app.
 // Updated on every EP2 packet, regardless of MOX state.
 // If we are in TX and this goes stale, the watchdog fires tx_off().
 #define EP2_WATCHDOG_MS 500  // 0.5 second with no EP2 → force RX
-static volatile unsigned long ep2_last_time_ms = 0;
 
 // Previous sample for the 2× interpolation filter
 static double tx_up_prev_i = 0.0;
@@ -114,6 +113,10 @@ static void tx_iq_push_48k(double i_val, double q_val) {
   tx_up_prev_i = i_val;
   tx_up_prev_q = q_val;
   tx_iq_last_time_ms = millis_now();
+  if (!hpsdr_tx_data_active) {
+    hpsdr_tx_data_active = 1;
+    g_idle_add(hpsdr_tx_on_idle, NULL);
+  }
 }
 
 // --- Public API for sbitx.c --------------------------------------------------
@@ -153,25 +156,12 @@ int hpsdr_get_tx_iq(double *out_i, double *out_q, int max_samples) {
 
 static gboolean hpsdr_watchdog(gpointer data) {
   (void)data;
+  if (!running) return G_SOURCE_REMOVE;
 
-  if (!running)
-    return G_SOURCE_REMOVE;
-
-  // If sBitx is stuck in TX but the remote is no longer asserting MOX,
-  // force it back to RX.
-  if (in_tx && !remote_mox) {
-    printf("hpsdr watchdog: in_tx but remote_mox=0 — forcing RX\n");
-    tx_iq_wr = 0;
-    tx_iq_rd = 0;
-    tx_up_prev_i = 0.0;
-    tx_up_prev_q = 0.0;
-    tx_off();
-  }
-
-  // Separate check: remote app has completely disappeared while transmitting
-  if (in_tx && client_active && (millis_now() - ep2_last_time_ms > EP2_WATCHDOG_MS)) {
-    printf("hpsdr watchdog: no EP2 for >%d ms while in TX — forcing RX\n", EP2_WATCHDOG_MS);
-    remote_mox = 0;
+  if (hpsdr_tx_data_active &&
+      (millis_now() - tx_iq_last_time_ms > 500)) {
+    printf("hpsdr watchdog: IQ data gone >500ms — forcing RX\n");
+    hpsdr_tx_data_active = 0;
     tx_iq_wr = 0;
     tx_iq_rd = 0;
     tx_up_prev_i = 0.0;
@@ -181,6 +171,7 @@ static gboolean hpsdr_watchdog(gpointer data) {
 
   return G_SOURCE_CONTINUE;
 }
+
 // =============================================================================
 // --- Packet construction & inline transmission (unchanged) -------------------
 // =============================================================================
@@ -372,7 +363,7 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
       tx_up_prev_i = 0.0;
       tx_up_prev_q = 0.0;
       remote_mox = 0;  // Reset MOX state on new connection
-      ep2_last_time_ms = millis_now(); // Seed watchdog so it doesn't fire immediately
+      //ep2_last_time_ms = millis_now(); // Seed watchdog so it doesn't fire immediately
       client_active = 1;
       printf("hpsdr: streaming STARTED to %s:%d\n", inet_ntoa(stream_dest.sin_addr),
              ntohs(stream_dest.sin_port));
@@ -381,8 +372,8 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
       printf("hpsdr: streaming STOPPED\n");
       
       // Safety catch: If the client disconnected while transmitting, turn it off
-      if (remote_mox) {
-          remote_mox = 0;
+      if (hpsdr_tx_data_active) {
+          hpsdr_tx_data_active = 0;
           g_idle_add(hpsdr_tx_off_idle, NULL);
       }
     }
@@ -400,27 +391,6 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
 
         int c0 = fp[3];
         int addr = (c0 >> 1) & 0x1F;
-        int ptt = c0 & 0x01; // bit 0 = MOX from remote app
-
-        // Track remote MOX state and trigger T/R switch (from every frame)
-        if (ptt != remote_mox) {
-            remote_mox = ptt;
-            printf("hpsdr: remote MOX %s\n", remote_mox ? "ON" : "OFF");
-        
-            // Schedule TX/RX switch on the GTK main thread — bypasses the
-            // command queue (can't overflow) and bypasses cw_poll() fighting us
-            if (remote_mox)
-                g_idle_add(hpsdr_tx_on_idle, NULL);
-            else
-                g_idle_add(hpsdr_tx_off_idle, NULL);
-        
-            if (!remote_mox) {
-                tx_iq_wr = 0;
-                tx_iq_rd = 0;
-                tx_up_prev_i = 0.0;
-                tx_up_prev_q = 0.0;
-            }
-        }
 
         if (addr == 0x02) { // Remote frequency set
           int f = (fp[4] << 24) | (fp[5] << 16) | (fp[6] << 8) | fp[7];
@@ -432,12 +402,7 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
           }
         }
 
-        // Only extract TX IQ if *remote* side is actively asserting MOX.
-        // Do NOT use `in_tx` here — it lags behind because tx_off() runs
-        // asynchronously on the GTK main thread.
-        if (remote_mox) {
-            extract_tx_iq_from_frame(fp);
-        }
+        extract_tx_iq_from_frame(fp);
       }
     }
     break;
