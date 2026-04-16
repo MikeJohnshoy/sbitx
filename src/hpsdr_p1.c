@@ -479,8 +479,10 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
 
         // Only push IQ into the ring when SDR Console has MOX set.
         // This prevents connect-time noise from falsely triggering TX.
-        if (mox)
+        if (mox) {
+          tx_iq_last_time_ms = millis_now();  // keep watchdog fed while MOX is set
           extract_tx_iq_from_frame(fp);
+        }
       }
     }
     break;
