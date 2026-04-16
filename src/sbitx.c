@@ -1862,6 +1862,27 @@ static int tx_process_restart = 1;
 // sideband selection) this is a stripped down version of tx_process()
 static void tx_process_iq(int32_t *input_rx, int32_t *input_mic, int32_t *output_speaker,
                           int32_t *output_tx, int n_samples) {
+
+  // --- Step 2: Signal Tracer ---
+  static int packets_seen = 0;
+  long long magnitude_sum = 0;
+
+  for (int i = 0; i < n_samples; i++) {
+      // Interleaved I/Q: input_mic[i*2] is I, input_mic[i*2+1] is Q
+      magnitude_sum += abs(input_mic[i*2]) + abs(input_mic[i*2+1]);
+  }
+
+  // Report every ~1 second (assuming 48k/512 samples per block)
+  if (packets_seen++ % 100 == 0) {
+      if (magnitude_sum > 0) {
+          // Signal detected! SDRConsole is successfully pushing data.
+          printf("IQ Path Active: Avg Magnitude = %lld\n", magnitude_sum / (n_samples * 2));
+      } else {
+          // No signal. The HPSDR code is active, but the buffer is empty.
+          printf("IQ Path Warning: Buffer is empty (all zeros).\n");
+      }
+  }
+  
   // fetch 96 kHz (upsampled) IQ from the HPSDR ring buffer
   double iq_i[n_samples];
   double iq_q[n_samples];
