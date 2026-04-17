@@ -382,30 +382,20 @@ void hpsdr_send_iq(double *i_samples, double *q_samples, int n) {
 // each slot is 8 bytes: I(16-bit) Q(16-bit) + 2 padding bytes in P1 TX format.
 // SDRConsole sends TX IQ as two 16-bit signed values per slot.
 static void extract_tx_iq_from_frame(uint8_t *fp) {
-    static int pkt_count = 0;
-    static double max_boosted_mag = 0; // Track the final double value
-
+    // fp starts at the 8-byte C&C header of the frame
     for (int s = 0; s < 63; s++) {
-        uint8_t *sp = fp + 8 + s * 8;
-        int16_t i_raw = (int16_t)((sp[4] << 8) | sp[5]);
-        int16_t q_raw = (int16_t)((sp[6] << 8) | sp[7]);
+        // Each slot is 8 bytes. Samples start after the 8-byte header.
+        uint8_t *sp = fp + 8 + (s * 8);
+
+        // Protocol 1 TX: I=[4..5], Q=[6..7]
+        int16_t i_raw = (int16_t)(((uint16_t)sp[4] << 8) | (uint16_t)sp[5]);
+        int16_t q_raw = (int16_t)(((uint16_t)sp[6] << 8) | (uint16_t)sp[7]);
 
         if (i_raw == 0 && q_raw == 0) continue;
 
-        double boost = 1000.0; 
-        double i_final = (i_raw * boost) / 32768.0;
-        double q_final = (q_raw * boost) / 32768.0;
-
-        // Track the peak of the boosted signal (should be between 0.0 and 1.0)
-        double mag = sqrt(i_final*i_final + q_final*q_final);
-        if (mag > max_boosted_mag) max_boosted_mag = mag;
-
-        tx_iq_push_48k(i_final, q_final);
-    }
-
-    if (++pkt_count % 100 == 0) {
-        printf("DEBUG: Boosted Peak Mag: %.4f (Goal is ~0.5)\n", max_boosted_mag);
-        max_boosted_mag = 0;
+        // Start with a modest boost of 10.0 to see if it's audible
+        double boost = 10.0; 
+        tx_iq_push_48k((i_raw * boost) / 32768.0, (q_raw * boost) / 32768.0);
     }
 }
 
@@ -469,59 +459,56 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     break;
 
   case 0x01: // EP2 host commands
-    if (!client_active) break;
-    // Feed the watchdog if we get a packet of reasonable size
-    if (len > 500) { 
-        ep2_last_time_ms = millis_now();
-    }
+    if (!client_active)
+      break;
     
-    if (len >= 512) {
-
-      ep2_last_time_ms = millis_now(); // feed watchdog on every EP2 packet
-
-      for (int frame = 0; frame < 2; frame++) {
-        uint8_t *fp = buf + 8 + frame * 512;
-        if (fp[0] != 0x7F || fp[1] != 0x7F || fp[2] != 0x7F)
-          continue;
-
-        int c0 = fp[3];
-        int addr = (c0 >> 1) & 0x1F;
-        int mox = c0 & 0x01;
-        printf("hpsdr: frame %d c0=0x%02x addr=0x%02x mox=%d\n", frame, c0, addr, mox);
-
-        // MOX transition — edge triggered TX on/off
-        if (mox != remote_mox) {
-          remote_mox = mox;
-          printf("hpsdr: MOX %s\n", mox ? "ON" : "OFF");
-          if (mox) {
-            hpsdr_tx_data_active = 1;
-            g_idle_add(hpsdr_tx_on_idle, NULL);
-          } else {
-            hpsdr_tx_data_active = 0;
-            tx_iq_wr = 0;
-            tx_iq_rd = 0;
-            g_idle_add(hpsdr_tx_off_idle, NULL);
-          }
-        }
-
-        if (addr == 0x02) {
-          int f = (fp[4] << 24) | (fp[5] << 16) | (fp[6] << 8) | fp[7];
-          if (f > 0 && f != freq_hdr) {
-            printf("hpsdr: remote set freq %d Hz\n", f);
-            char cmd[50];
-            sprintf(cmd, "freq %d", f);
-            remote_execute(cmd);
-          }
-        }
-
-        if (mox)
-          extract_tx_iq_from_frame(fp);
+    // 1. Feed the watchdog immediately if it's a valid HPSDR packet
+    // This stops the "Client probably crashed" logs!
+    ep2_last_time_ms = millis_now();
+    
+    // 2. Use the developer's frame-by-frame logic
+    // We skip the 8-byte Metis header (buf + 8)
+    uint8_t *ptr = buf + 8;
+    
+    for (int frame = 0; frame < 2; frame++) {
+      // Sync check (the 0x7F 0x7F 0x7F)
+      if (ptr[0] != 0x7F || ptr[1] != 0x7F || ptr[2] != 0x7F) {
+        ptr += 512; // Skip broken frame
+        continue;
       }
+    
+      uint8_t c0 = ptr[3];
+      int mox = c0 & 0x01;
+      int addr = (c0 >> 1) & 0x1F;
+    
+      // Frame 0 handles MOX
+      if (frame == 0 && mox != remote_mox) {
+        remote_mox = mox;
+        printf("hpsdr: MOX %s\n", mox ? "ON" : "OFF");
+        g_idle_add(mox ? hpsdr_tx_on_idle : hpsdr_tx_off_idle, NULL);
+      }
+    
+      // Frame 1 handles Frequency (Addr 0x02)
+      if (frame == 1 && addr == 0x02) {
+        uint32_t f = ((uint32_t)ptr[4] << 24) | ((uint32_t)ptr[5] << 16) | ((uint32_t)ptr[6] << 8) |
+                     (uint32_t)ptr[7];
+        if (f > 0 && f != freq_hdr) {
+          char cmd[50];
+          sprintf(cmd, "freq %d", f);
+          remote_execute(cmd);
+        }
+      }
+    
+      // 3. Extract IQ data if we are in TX mode
+      if (remote_mox) {
+        // We pass the frame pointer + 8 bytes of C&C header to the extractor
+        extract_tx_iq_from_frame(ptr);
+      }
+    
+      ptr += 512; // Move to the next frame
     }
     break;
-  }
-}
-
+    
 static void *hpsdr_poll_thread(void *arg) {
   (void)arg;
   uint8_t buf[2048];
