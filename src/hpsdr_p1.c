@@ -458,58 +458,53 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     }
     break;
 
-  case 0x01: // EP2 host commands
-    {
-    if (!client_active)
-      break;
-    
-    // 1. Feed the watchdog immediately if it's a valid HPSDR packet
-    // This stops the "Client probably crashed" logs!
-    ep2_last_time_ms = millis_now();
-    
-    // 2. Use the developer's frame-by-frame logic
-    // We skip the 8-byte Metis header (buf + 8)
-    uint8_t *ptr = buf + 8;
-    
-    for (int frame = 0; frame < 2; frame++) {
-      // Sync check (the 0x7F 0x7F 0x7F)
-      if (ptr[0] != 0x7F || ptr[1] != 0x7F || ptr[2] != 0x7F) {
-        ptr += 512; // Skip broken frame
-        continue;
-      }
-    
-      uint8_t c0 = ptr[3];
-      int mox = c0 & 0x01;
-      int addr = (c0 >> 1) & 0x1F;
-    
-      // Frame 0 handles MOX
-      if (frame == 0 && mox != remote_mox) {
-        remote_mox = mox;
-        printf("hpsdr: MOX %s\n", mox ? "ON" : "OFF");
-        g_idle_add(mox ? hpsdr_tx_on_idle : hpsdr_tx_off_idle, NULL);
-      }
-    
-      // Frame 1 handles Frequency (Addr 0x02)
-      if (frame == 1 && addr == 0x02) {
-        uint32_t f = ((uint32_t)ptr[4] << 24) | ((uint32_t)ptr[5] << 16) | ((uint32_t)ptr[6] << 8) |
-                     (uint32_t)ptr[7];
-        if (f > 0 && f != freq_hdr) {
-          char cmd[50];
-          sprintf(cmd, "freq %d", f);
-          remote_execute(cmd);
+case 0x01: // EP2 host commands
+    { // Start scope for case
+      if (!client_active)
+        break;
+      
+      ep2_last_time_ms = millis_now();
+      uint8_t *ptr = buf + 8;
+      
+      for (int frame = 0; frame < 2; frame++) {
+        if (ptr[0] != 0x7F || ptr[1] != 0x7F || ptr[2] != 0x7F) {
+          ptr += 512;
+          continue;
         }
+      
+        uint8_t c0 = ptr[3];
+        int mox = c0 & 0x01;
+        int addr = (c0 >> 1) & 0x1F;
+      
+        if (frame == 0 && mox != remote_mox) {
+          remote_mox = mox;
+          printf("hpsdr: MOX %s\n", mox ? "ON" : "OFF");
+          g_idle_add(mox ? hpsdr_tx_on_idle : hpsdr_tx_off_idle, NULL);
+        }
+      
+        if (frame == 1 && addr == 0x02) {
+          uint32_t f = ((uint32_t)ptr[4] << 24) | ((uint32_t)ptr[5] << 16) | 
+                       ((uint32_t)ptr[6] << 8) | (uint32_t)ptr[7];
+          if (f > 0 && f != freq_hdr) {
+            char cmd[50];
+            sprintf(cmd, "freq %d", f);
+            remote_execute(cmd);
+            freq_hdr = f; // Update this so we don't spam the command
+          }
+        }
+      
+        if (remote_mox) {
+          extract_tx_iq_from_frame(ptr);
+        }
+        ptr += 512;
       }
-    
-      // 3. Extract IQ data if we are in TX mode
-      if (remote_mox) {
-        // We pass the frame pointer + 8 bytes of C&C header to the extractor
-        extract_tx_iq_from_frame(ptr);
-      }
-    
-      ptr += 512; // Move to the next frame
-    }
-    break;
-  }
+      break;
+    } // End scope for case 0x01
+
+    default:
+      break;
+  } 
+}
     
 static void *hpsdr_poll_thread(void *arg) {
   (void)arg;
