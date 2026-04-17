@@ -67,19 +67,23 @@ static volatile unsigned long ep2_last_time_ms = 0;
 // from the poll thread whenever incoming IQ data starts or stops.
 // =============================================================================
 
-static gboolean hpsdr_tx_on_idle(gpointer data) {
-  (void)data;
-  if (!in_tx)
-    tx_on(TX_SOFT);
-  return G_SOURCE_REMOVE; // one-shot
-}
+// --- Coalesced T/R idle callback ---
+// 0 = nothing pending, 1 = tx_on pending, 2 = tx_off pending
+static volatile int tr_pending = 0;
 
-static gboolean hpsdr_tx_off_idle(gpointer data) {
-  (void)data;
-  printf("hpsdr_tx_off_idle: in_tx=%d (extern)\n", in_tx);
-  tx_off();
-  printf("hpsdr_tx_off_idle: after tx_off, in_tx=%d (extern)\n", in_tx);
-  return G_SOURCE_REMOVE;
+static gboolean hpsdr_tr_idle(gpointer data) {
+    (void)data;
+    int action = tr_pending;
+    tr_pending = 0;
+
+    if (action == 1 && !in_tx) {
+        printf("hpsdr_tr_idle: switching to TX\n");
+        tx_on(TX_SOFT);
+    } else if (action == 2) {
+        printf("hpsdr_tr_idle: switching to RX (in_tx=%d)\n", in_tx);
+        tx_off();
+    }
+    return G_SOURCE_REMOVE;
 }
 
 // =============================================================================
@@ -416,7 +420,10 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
         printf("hpsdr: streaming STOPPED\n");
         if (hpsdr_tx_data_active) {
             hpsdr_tx_data_active = 0;
-            g_idle_add(hpsdr_tx_off_idle, NULL);
+            if (tr_pending != 2) {
+               tr_pending = 2;
+               g_idle_add(hpsdr_tr_idle, NULL);
+           }
         }
         remote_mox = 0;
         break;
@@ -436,18 +443,48 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
             remote_execute(cmd);
         }
 
-        // --- MOX state machine (single control path) ---
-        if (r.mox && !remote_mox) {
-            remote_mox = 1;
-            hpsdr_tx_data_active = 1;
-            printf("hpsdr: MOX ON\n");
-            g_idle_add(hpsdr_tx_on_idle, NULL);
-        } else if (!r.mox && remote_mox) {
-            remote_mox = 0;
-            hpsdr_tx_data_active = 0;
-            flush_tx_ring();
-            printf("hpsdr: MOX OFF\n");
-            g_idle_add(hpsdr_tx_off_idle, NULL);
+       // --- MOX state machine (debounced, coalesced) ---
+        {
+            static int mox_count   = 0;
+            static int mox_pending_state = 0;
+
+            if (r.mox != remote_mox) {
+                // MOX differs from current state — count consecutive matches
+                if (r.mox != mox_pending_state) {
+                    // Direction changed again — restart counter
+                    mox_pending_state = r.mox;
+                    mox_count = 1;
+                } else {
+                    mox_count++;
+                }
+
+              if (mox_count >= 4) {
+                  // Stable for ~4 packets (~10 ms) — commit the transition
+                  remote_mox = mox_pending_state;
+                  mox_count = 0;
+
+                  if (remote_mox) {
+                      hpsdr_tx_data_active = 1;
+                      printf("hpsdr: MOX ON (debounced)\n");
+                      if (tr_pending != 1) {
+                          tr_pending = 1;
+                          g_idle_add(hpsdr_tr_idle, NULL);
+                      }
+                  } else {
+                      hpsdr_tx_data_active = 0;
+                      flush_tx_ring();
+                      printf("hpsdr: MOX OFF (debounced)\n");
+                      if (tr_pending != 2) {
+                          tr_pending = 2;
+                          g_idle_add(hpsdr_tr_idle, NULL);
+                      }
+                  }
+              }
+            } else {
+                // MOX matches current state — reset debounce
+                mox_count = 0;
+                mox_pending_state = remote_mox;
+            }
         }
 
         // --- TX IQ data (only when MOX is active) ---
