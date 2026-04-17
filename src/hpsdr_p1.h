@@ -5,7 +5,24 @@
 
 #define HPSDR_PORT 1024
 #define HPSDR_PKT_SIZE 1032
-#define SAMPLES_PER_PACKET 126
+#define SAMPLES_PER_PACKET 126  // pick one!
+#define SAMPLES_PER_PKT    126
+
+// Packet types returned by hpsdr_classify()
+#define PKT_UNKNOWN   0
+#define PKT_DISCOVERY 1
+#define PKT_START     2
+#define PKT_STOP      3
+#define PKT_EP2       4
+#define HPSDR_DISCOVERY_REPLY   64
+
+
+typedef struct {
+    int      mox;
+    uint32_t freq;
+    float    iq[252];
+    int      n_samples;
+} hpsdr_ep2_result_t;
 
 int  hpsdr_init(void);
 void hpsdr_stop(void);
