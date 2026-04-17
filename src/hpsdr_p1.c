@@ -411,6 +411,31 @@ void hpsdr_send_iq(double *i_samples, double *q_samples, int n) {
 // Any T/R transitions are dispatched to the GTK main thread via g_idle_add().
 // =============================================================================
 
+static void hpsdr_reply_discovery(struct sockaddr_in *sender) {
+  uint8_t reply[HPSDR_DISCOVERY_REPLY_BYTES];
+  memset(reply, 0, sizeof(reply));
+
+  reply[0] = 0xEF;
+  reply[1] = 0xFE;
+  reply[2] = 0x02;
+  reply[3] = 0x00; // Status: available
+
+  // Use the fake MAC address from the working code
+  reply[4] = 0x00; reply[5] = 0x1C; reply[6] = 0xC0;
+  reply[7] = 0xA2; reply[8] = 0x22; reply[9] = 0x5B;
+
+  reply[10] = 0x06; // Board type (Hermes/sBitx)
+  reply[11] = 0x25; // Protocol version
+
+  sendto(hpsdr_sock, reply, sizeof(reply), 0, (struct sockaddr *)sender, sizeof(*sender));
+}
+
+static void hpsdr_reply_board_info(struct sockaddr_in *sender) {
+  // For most setups, re-sending the discovery reply or a 60-byte 
+  // status packet works to keep the keep-alive happy.
+  hpsdr_reply_discovery(sender);
+}
+
 // Extract TX IQ audio samples from an EP2 frame.
 // Each frame has 63 audio sample slots at offsets 8..511,
 // each slot is 8 bytes: I(16-bit) Q(16-bit) + 2 padding bytes in P1 TX format.
@@ -419,15 +444,15 @@ void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
   if (len <= 0)
     return;
 
-  // Initial client setup: If we haven't seen this client before, lock onto them
+  // 1. Initial client setup: Lock onto the first sender we see
   if (!client_active) {
-    memcpy(&client_addr, sender, sizeof(client_addr));
+    memcpy(&hpsdr_client_addr, sender, sizeof(hpsdr_client_addr));
     client_active = 1;
     printf("hpsdr: streaming STARTED to %s:%d\n", inet_ntoa(sender->sin_addr),
            ntohs(sender->sin_port));
   }
 
-  // Check the HPSDR Endpoint ID (buf[2])
+  // 2. Check the HPSDR Endpoint ID (buf[2])
   switch (buf[2]) {
   case 0x00: // Discovery Request
     hpsdr_reply_discovery(sender);
@@ -438,24 +463,25 @@ void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     if (!client_active)
       break;
 
-    // Feed the watchdog immediately
+    // Feed the watchdog!
     ep2_last_time_ms = millis_now();
 
     int mox = 0;
     uint32_t new_freq = 0;
-    float iq_temp[252]; // 126 samples (2 frames) * 2 (I and Q)
+    float iq_temp[252]; 
 
     // Use the helper to unpack the packet structure
     int samples = protocol_unpack_ep2_iq(buf, len, iq_temp, 126, &mox, &new_freq);
 
-    // 1. Handle MOX (PTT) state changes
+    // Handle MOX (PTT) state changes
     if (mox != remote_mox) {
       remote_mox = mox;
       printf("hpsdr: MOX %s\n", mox ? "ON" : "OFF");
+      // Use g_idle_add to ensure thread safety with the GTK UI
       g_idle_add(mox ? hpsdr_tx_on_idle : hpsdr_tx_off_idle, NULL);
     }
 
-    // 2. Handle Frequency changes (Addr 0x02 in Protocol 1)
+    // Handle Frequency changes
     if (new_freq > 0 && new_freq != freq_hdr) {
       freq_hdr = new_freq;
       char cmd[50];
@@ -463,14 +489,14 @@ void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
       remote_execute(cmd);
     }
 
-    // 3. Only push samples to the mixer if we are in TX mode
+    // 3. Only push samples to the mixer if we are actually in TX mode
     if (remote_mox && samples > 0) {
-      double boost = 10.0; // Adjust boost as needed
+      double boost = 10.0; 
       for (int i = 0; i < samples; i++) {
         tx_iq_push_48k((double)iq_temp[i * 2] * boost, (double)iq_temp[i * 2 + 1] * boost);
       }
     } else {
-      // Clear the local buffer count if not transmitting to prevent hanging PTT
+      // Clear the local buffer count if not transmitting
       iq_buf_count = 0;
     }
     break;
@@ -481,7 +507,6 @@ void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     break;
 
   default:
-    // Ignore unknown endpoints
     break;
   }
 }
