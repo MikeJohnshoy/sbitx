@@ -26,6 +26,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include "hpsdr_protocol.h"
 
 #define HPSDR_PORT 1024
 #define HPSDR_PKT_SIZE 1032
@@ -127,33 +128,45 @@ static unsigned long millis_now(void) {
   return (unsigned long)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
 }
 
+static void flush_tx_ring(void) {
+    tx_iq_wr = 0;
+    tx_iq_rd = 0;
+    tx_up_prev_i = 0.0;
+    tx_up_prev_q = 0.0;
+}
+
+static void reset_all_tx_state(void) {
+    flush_tx_ring();
+    hpsdr_tx_data_active = 0;
+    remote_mox = 0;
+    ep2_last_time_ms = millis_now();
+}
+
 // Write one 48 kHz sample pair into the ring as two 96 kHz samples
 // using linear interpolation (simple half-band upsample).
 static void tx_iq_push_48k(double i_val, double q_val) {
-  // Interpolated mid-point sample (insert between previous and current)
-  double mid_i = 0.5 * (tx_up_prev_i + i_val);
-  double mid_q = 0.5 * (tx_up_prev_q + q_val);
+    double mid_i = 0.5 * (tx_up_prev_i + i_val);
+    double mid_q = 0.5 * (tx_up_prev_q + q_val);
 
-  int wr = tx_iq_wr;
+    int wr = tx_iq_wr;
+    int rd = tx_iq_rd;
 
-  tx_iq_ring_i[wr & TX_IQ_RING_MASK] = mid_i;
-  tx_iq_ring_q[wr & TX_IQ_RING_MASK] = mid_q;
-  wr++;
+    // Overflow guard — drop if ring nearly full
+    if ((wr - rd) >= (TX_IQ_RING_SIZE - 4))
+        return;
 
-  tx_iq_ring_i[wr & TX_IQ_RING_MASK] = i_val;
-  tx_iq_ring_q[wr & TX_IQ_RING_MASK] = q_val;
-  wr++;
+    tx_iq_ring_i[wr & TX_IQ_RING_MASK] = mid_i;
+    tx_iq_ring_q[wr & TX_IQ_RING_MASK] = mid_q;
+    wr++;
 
-  tx_iq_wr = wr;
-  tx_up_prev_i = i_val;
-  tx_up_prev_q = q_val;
-  tx_iq_last_time_ms = millis_now();
-  if (!hpsdr_tx_data_active) {
-    hpsdr_tx_data_active = 1;
-    // DEBUG CODE
-    printf("hpsdr: first non-zero IQ — triggering TX (i=%.6f q=%.6f)\n", i_val, q_val);
-    g_idle_add(hpsdr_tx_on_idle, NULL);
-  }
+    tx_iq_ring_i[wr & TX_IQ_RING_MASK] = i_val;
+    tx_iq_ring_q[wr & TX_IQ_RING_MASK] = q_val;
+    wr++;
+
+    tx_iq_wr = wr;
+    tx_up_prev_i = i_val;
+    tx_up_prev_q = q_val;
+    tx_iq_last_time_ms = millis_now();
 }
 
 // =============================================================================
@@ -206,21 +219,16 @@ int hpsdr_get_tx_iq(double *out_i, double *out_q, int max_samples) {
 // =============================================================================
 
 static gboolean hpsdr_watchdog(gpointer data) {
-  (void)data;
-  if (!running) return G_SOURCE_REMOVE;
+    (void)data;
+    if (!running) return G_SOURCE_REMOVE;
 
-  if (in_tx && (millis_now() - ep2_last_time_ms > EP2_WATCHDOG_MS)) {
-    printf("hpsdr watchdog: no EP2 for >%dms — client probably crashed, forcing RX\n", EP2_WATCHDOG_MS);
-    remote_mox = 0;
-    hpsdr_tx_data_active = 0;
-    tx_iq_wr = 0;
-    tx_iq_rd = 0;
-    tx_up_prev_i = 0.0;
-    tx_up_prev_q = 0.0;
-    tx_off();
-  }
+    if (in_tx && (millis_now() - ep2_last_time_ms > EP2_WATCHDOG_MS)) {
+        printf("hpsdr watchdog: no EP2 for >%dms — forcing RX\n", EP2_WATCHDOG_MS);
+        reset_all_tx_state();
+        tx_off();
+    }
 
-  return G_SOURCE_CONTINUE;
+    return G_SOURCE_CONTINUE;
 }
 
 // =============================================================================
@@ -377,144 +385,80 @@ void hpsdr_send_iq(double *i_samples, double *q_samples, int n) {
 // Any T/R transitions are dispatched to the GTK main thread via g_idle_add().
 // =============================================================================
 
-// Extract TX IQ audio samples from an EP2 frame.
-// Each frame has 63 audio sample slots at offsets 8..511,
-// each slot is 8 bytes: I(16-bit) Q(16-bit) + 2 padding bytes in P1 TX format.
-// SDRConsole sends TX IQ as two 16-bit signed values per slot.
-static void extract_tx_iq_from_frame(uint8_t *fp) {
-    static int pkt_count = 0;
-    int16_t max_i = 0;
-
-    for (int s = 0; s < 63; s++) {
-        uint8_t *sp = fp + 8 + s * 8;
-        
-        // Try reading both possible locations to compare
-        int16_t mic_i = (int16_t)((sp[0] << 8) | sp[1]);
-        int16_t i_raw = (int16_t)((sp[4] << 8) | sp[5]);
-        int16_t q_raw = (int16_t)((sp[6] << 8) | sp[7]);
-
-        if (abs(i_raw) > max_i) max_i = abs(i_raw);
-
-        // Actual logic
-        if (i_raw == 0 && q_raw == 0) continue;
-        
-        double i_val = i_raw / 32768.0;
-        double q_val = q_raw / 32768.0;
-        tx_iq_push_48k(i_val, q_val);
-    }
-
-    // Print peak stats every 100 packets (~1.3 seconds of audio)
-    if (++pkt_count % 100 == 0) {
-        printf("HPSDR TX Stats: Peak I=%d | Byte0-1 Val=%d\n", max_i, (int16_t)((fp[8]<<8)|fp[9]));
-    }
-}
 
 static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
-  if (len < 4 || buf[0] != 0xEF || buf[1] != 0xFE)
-    return;
+    int type = hpsdr_classify(buf, len);
 
-  switch (buf[2]) {
-  case 0x02: // Discovery request
-  {
-    uint8_t reply[64];
-    memset(reply, 0, sizeof(reply));
-    reply[0] = 0xEF;
-    reply[1] = 0xFE;
-    reply[2] = 0x02;
+    switch (type) {
 
-    // 0x00 = available, 0x02 = in-use
-    int same_client = (sender->sin_addr.s_addr == stream_dest.sin_addr.s_addr);
-    reply[3] = (client_active && !same_client) ? 0x02 : 0x00;
-
-    // Fake MAC address & board info (Hermes)
-    reply[4] = 0x00;
-    reply[5] = 0x1C;
-    reply[6] = 0xC0;
-    reply[7] = 0xA2;
-    reply[8] = 0x22;
-    reply[9] = 0x5B;
-    reply[10] = 0x06; // Board type
-    reply[11] = 0x25; // Protocol version
-
-    sendto(hpsdr_sock, reply, sizeof(reply), 0, (struct sockaddr *)sender, sizeof(*sender));
-  } break;
-
-  case 0x04: // Start / stop streaming
-    if (buf[3] & 0x01) {
-      stream_dest = *sender;
-      tx_seq = 0;
-      iq_buf_count = 0;
-      // Reset TX IQ state on new connection
-      tx_iq_wr = 0;
-      tx_iq_rd = 0;
-      tx_up_prev_i = 0.0;
-      tx_up_prev_q = 0.0;
-      hpsdr_tx_data_active = 0; // reset data-driven TX state on new connection
-      client_active = 1;
-      remote_mox = 0;
-      ep2_last_time_ms = millis_now(); // don't let watchdog fire immediately
-      printf("hpsdr: streaming STARTED to %s:%d\n", inet_ntoa(stream_dest.sin_addr),
-             ntohs(stream_dest.sin_port));
-    } else {
-      client_active = 0;
-      remote_mox = 0;
-      printf("hpsdr: streaming STOPPED\n");
-
-      // Safety catch: If the client disconnected while transmitting, turn it off
-      if (hpsdr_tx_data_active) {
-        hpsdr_tx_data_active = 0;
-        g_idle_add(hpsdr_tx_off_idle, NULL);
-      }
+    case PKT_DISCOVERY: {
+        uint8_t reply[HPSDR_DISCOVERY_REPLY];
+        int same = (sender->sin_addr.s_addr == stream_dest.sin_addr.s_addr);
+        hpsdr_build_discovery_reply(reply, client_active && !same);
+        sendto(hpsdr_sock, reply, sizeof(reply), 0,
+               (struct sockaddr *)sender, sizeof(*sender));
+        break;
     }
-    break;
 
-  case 0x01: // EP2 host commands
-    if (!client_active) break;
-    if (len >= HPSDR_PKT_SIZE) {
+    case PKT_START:
+        stream_dest = *sender;
+        tx_seq = 0;
+        iq_buf_count = 0;
+        reset_all_tx_state();
+        client_active = 1;
+        printf("hpsdr: streaming STARTED to %s:%d\n",
+               inet_ntoa(stream_dest.sin_addr),
+               ntohs(stream_dest.sin_port));
+        break;
 
-      ep2_last_time_ms = millis_now(); // feed watchdog on every EP2 packet
-
-      for (int frame = 0; frame < 2; frame++) {
-        uint8_t *fp = buf + 8 + frame * 512;
-        if (fp[0] != 0x7F || fp[1] != 0x7F || fp[2] != 0x7F)
-          continue;
-
-        int c0 = fp[3];
-        int addr = (c0 >> 1) & 0x1F;
-        int mox = c0 & 0x01;
-        printf("hpsdr: frame %d c0=0x%02x addr=0x%02x mox=%d\n", frame, c0, addr, mox);
-
-        // MOX transition — edge triggered TX on/off
-        if (mox != remote_mox) {
-          remote_mox = mox;
-          printf("hpsdr: MOX %s\n", mox ? "ON" : "OFF");
-          if (mox) {
-            hpsdr_tx_data_active = 1;
-            g_idle_add(hpsdr_tx_on_idle, NULL);
-          } else {
+    case PKT_STOP:
+        client_active = 0;
+        printf("hpsdr: streaming STOPPED\n");
+        if (hpsdr_tx_data_active) {
             hpsdr_tx_data_active = 0;
-            tx_iq_wr = 0;
-            tx_iq_rd = 0;
             g_idle_add(hpsdr_tx_off_idle, NULL);
-          }
         }
+        remote_mox = 0;
+        break;
 
-        if (addr == 0x02) {
-          int f = (fp[4] << 24) | (fp[5] << 16) | (fp[6] << 8) | fp[7];
-          if (f > 0 && f != freq_hdr) {
-            printf("hpsdr: remote set freq %d Hz\n", f);
+    case PKT_EP2: {
+        if (!client_active) break;
+        ep2_last_time_ms = millis_now();
+
+        hpsdr_ep2_result_t r;
+        hpsdr_unpack_ep2(buf, len, &r);
+
+        // --- Frequency ---
+        if (r.freq > 0 && r.freq != (uint32_t)freq_hdr) {
+            printf("hpsdr: remote set freq %d Hz\n", r.freq);
             char cmd[50];
-            sprintf(cmd, "freq %d", f);
+            sprintf(cmd, "freq %d", r.freq);
             remote_execute(cmd);
-          }
         }
 
-        if (mox)
-          extract_tx_iq_from_frame(fp);
-      }
+        // --- MOX state machine (single control path) ---
+        if (r.mox && !remote_mox) {
+            remote_mox = 1;
+            hpsdr_tx_data_active = 1;
+            printf("hpsdr: MOX ON\n");
+            g_idle_add(hpsdr_tx_on_idle, NULL);
+        } else if (!r.mox && remote_mox) {
+            remote_mox = 0;
+            hpsdr_tx_data_active = 0;
+            flush_tx_ring();
+            printf("hpsdr: MOX OFF\n");
+            g_idle_add(hpsdr_tx_off_idle, NULL);
+        }
+
+        // --- TX IQ data (only when MOX is active) ---
+        if (r.mox && r.n_samples > 0) {
+            for (int k = 0; k < r.n_samples; k++)
+                tx_iq_push_48k((double)r.iq[k * 2],
+                               (double)r.iq[k * 2 + 1]);
+        }
+        break;
     }
-    break;
-  }
+    }
 }
 
 static void *hpsdr_poll_thread(void *arg) {
