@@ -74,15 +74,10 @@ static gboolean hpsdr_tx_on_idle(gpointer data) {
 }
 
 static gboolean hpsdr_tx_off_idle(gpointer data) {
-    // This is what the GUI "RX" button effectively does
-    tx_off(); 
-    tr_switch(0); 
-    
-    // Safety: Clear our ring buffer here too just in case
-    tx_iq_ring_write = 0;
-    tx_iq_ring_read = 0;
-    
-    return FALSE;
+  tx_off();
+  tr_switch(0);
+  iq_buf_count = 0; // Clear the counter here too
+  return FALSE;
 }
 
 // =============================================================================
@@ -387,27 +382,23 @@ void hpsdr_send_iq(double *i_samples, double *q_samples, int n) {
 // SDRConsole sends TX IQ as two 16-bit signed values per slot.
 static void extract_tx_iq_from_frame(uint8_t *fp) {
   if (!remote_mox) {
-    // If MOX is off, don't just stop—clear the ring buffer 
-    // so old samples don't trigger "first non-zero IQ" logic.
-    tx_iq_ring_write = 0;
-    tx_iq_ring_read = 0;
+    // Correct way to flush your specific buffer:
+    iq_buf_count = 0; 
     return;
   }
-    // fp starts at the 8-byte C&C header of the frame
-    for (int s = 0; s < 63; s++) {
-        // Each slot is 8 bytes. Samples start after the 8-byte header.
-        uint8_t *sp = fp + 8 + (s * 8);
 
-        // Protocol 1 TX: I=[4..5], Q=[6..7]
-        int16_t i_raw = (int16_t)(((uint16_t)sp[4] << 8) | (uint16_t)sp[5]);
-        int16_t q_raw = (int16_t)(((uint16_t)sp[6] << 8) | (uint16_t)sp[7]);
+  // fp starts at the 8-byte C&C header of the frame
+  for (int s = 0; s < 63; s++) {
+    uint8_t *sp = fp + 8 + (s * 8);
 
-        if (i_raw == 0 && q_raw == 0) continue;
+    int16_t i_raw = (int16_t)(((uint16_t)sp[4] << 8) | (uint16_t)sp[5]);
+    int16_t q_raw = (int16_t)(((uint16_t)sp[6] << 8) | (uint16_t)sp[7]);
 
-        // Start with a modest boost of 10.0 to see if it's audible
-        double boost = 10.0; 
-        tx_iq_push_48k((i_raw * boost) / 32768.0, (q_raw * boost) / 32768.0);
-    }
+    if (i_raw == 0 && q_raw == 0) continue;
+
+    double boost = 10.0; 
+    tx_iq_push_48k((i_raw * boost) / 32768.0, (q_raw * boost) / 32768.0);
+  }
 }
 
 static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
