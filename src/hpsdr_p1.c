@@ -74,11 +74,15 @@ static gboolean hpsdr_tx_on_idle(gpointer data) {
 }
 
 static gboolean hpsdr_tx_off_idle(gpointer data) {
-  (void)data;
-  printf("hpsdr_tx_off_idle: in_tx=%d (extern)\n", in_tx);
-  tx_off();
-  printf("hpsdr_tx_off_idle: after tx_off, in_tx=%d (extern)\n", in_tx);
-  return G_SOURCE_REMOVE;
+    // This is what the GUI "RX" button effectively does
+    tx_off(); 
+    tr_switch(0); 
+    
+    // Safety: Clear our ring buffer here too just in case
+    tx_iq_ring_write = 0;
+    tx_iq_ring_read = 0;
+    
+    return FALSE;
 }
 
 // =============================================================================
@@ -382,6 +386,13 @@ void hpsdr_send_iq(double *i_samples, double *q_samples, int n) {
 // each slot is 8 bytes: I(16-bit) Q(16-bit) + 2 padding bytes in P1 TX format.
 // SDRConsole sends TX IQ as two 16-bit signed values per slot.
 static void extract_tx_iq_from_frame(uint8_t *fp) {
+  if (!remote_mox) {
+    // If MOX is off, don't just stop—clear the ring buffer 
+    // so old samples don't trigger "first non-zero IQ" logic.
+    tx_iq_ring_write = 0;
+    tx_iq_ring_read = 0;
+    return;
+  }
     // fp starts at the 8-byte C&C header of the frame
     for (int s = 0; s < 63; s++) {
         // Each slot is 8 bytes. Samples start after the 8-byte header.
