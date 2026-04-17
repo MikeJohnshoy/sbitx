@@ -459,6 +459,7 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     break;
 
   case 0x01: // EP2 host commands
+    {
     if (!client_active)
       break;
     
@@ -508,6 +509,7 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
       ptr += 512; // Move to the next frame
     }
     break;
+  }
     
 static void *hpsdr_poll_thread(void *arg) {
   (void)arg;
