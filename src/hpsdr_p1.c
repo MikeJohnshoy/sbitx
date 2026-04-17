@@ -382,24 +382,31 @@ void hpsdr_send_iq(double *i_samples, double *q_samples, int n) {
 // each slot is 8 bytes: I(16-bit) Q(16-bit) + 2 padding bytes in P1 TX format.
 // SDRConsole sends TX IQ as two 16-bit signed values per slot.
 static void extract_tx_iq_from_frame(uint8_t *fp) {
-  for (int s = 0; s < 63; s++) {
-    uint8_t *sp = fp + 8 + s * 8;
+    static int pkt_count = 0;
+    int16_t max_i = 0;
 
-    // TX IQ is at bytes 4-5 (I) and 6-7 (Q) — NOT bytes 0-3 (mic audio)
-    int16_t i_raw = (int16_t)((sp[4] << 8) | sp[5]);
-    int16_t q_raw = (int16_t)((sp[6] << 8) | sp[7]);
+    for (int s = 0; s < 63; s++) {
+        uint8_t *sp = fp + 8 + s * 8;
+        
+        // Try reading both possible locations to compare
+        int16_t mic_i = (int16_t)((sp[0] << 8) | sp[1]);
+        int16_t i_raw = (int16_t)((sp[4] << 8) | sp[5]);
+        int16_t q_raw = (int16_t)((sp[6] << 8) | sp[7]);
 
-    if (s == 0)
-      printf("hpsdr EP2 IQ: i_raw=%d q_raw=%d\n", i_raw, q_raw);
+        if (abs(i_raw) > max_i) max_i = abs(i_raw);
 
-    if (i_raw == 0 && q_raw == 0)
-      continue;
+        // Actual logic
+        if (i_raw == 0 && q_raw == 0) continue;
+        
+        double i_val = i_raw / 32768.0;
+        double q_val = q_raw / 32768.0;
+        tx_iq_push_48k(i_val, q_val);
+    }
 
-    double i_val = i_raw / 32768.0;
-    double q_val = q_raw / 32768.0;
-
-    tx_iq_push_48k(i_val, q_val);
-  }
+    // Print peak stats every 100 packets (~1.3 seconds of audio)
+    if (++pkt_count % 100 == 0) {
+        printf("HPSDR TX Stats: Peak I=%d | Byte0-1 Val=%d\n", max_i, (int16_t)((fp[8]<<8)|fp[9]));
+    }
 }
 
 static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
