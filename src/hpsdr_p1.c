@@ -43,7 +43,8 @@ static pthread_t poll_thread;
 static double iq_buf_i[SAMPLES_PER_PACKET];
 static double iq_buf_q[SAMPLES_PER_PACKET];
 static int iq_buf_count = 0;
-static double hpsdr_iq_gain = 30.0; // add gain to I and Q data going out
+static double hpsdr_iq_gain = 30.0;   // add gain to I and Q data going out
+static double hpsdr_tx_gain = 30.0;   // add gain to I and Q coming from external SDR
 
 // Filter state for the 24kHz LPF (stores the last sample of the previous block)
 static double last_i = 0.0;
@@ -460,8 +461,8 @@ static int hpsdr_unpack_ep2(const uint8_t *buf, int len, hpsdr_ep2_result_t *res
             int16_t is = (int16_t)(((uint16_t)ptr[4] << 8) | (uint16_t)ptr[5]);
             int16_t qs = (int16_t)(((uint16_t)ptr[6] << 8) | (uint16_t)ptr[7]);
 
-            result->iq[result->n_samples * 2 + 0] = (float)is / 32768.0f * 30;  // I ADDED A LOT OF GAIN HERE
-            result->iq[result->n_samples * 2 + 1] = (float)qs / 32768.0f * 30;
+            result->iq[result->n_samples * 2 + 0] = (float)is / 32768.0f * hpsdr_tx_gain;  // gain is added here
+            result->iq[result->n_samples * 2 + 1] = (float)qs / 32768.0f * hpsdr_tx_gain;
 
             ptr += 8;
             result->n_samples++;
