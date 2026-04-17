@@ -56,8 +56,7 @@ int hpsdr_unpack_ep2(const uint8_t *buf, int len, hpsdr_ep2_result_t *result)
         int addr = (c0 >> 1) & 0x1F;   // your correct parsing
         int mox  = c0 & 0x01;
 
-        if (frame == 0)
-            result->mox = mox;
+        result->mox |= mox;   // TX if *either* frame asserts MOX
 
         // TX frequency at C&C address 0x02
         if (addr == 0x02) {
