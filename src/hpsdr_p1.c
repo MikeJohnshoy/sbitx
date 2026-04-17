@@ -383,29 +383,31 @@ void hpsdr_send_iq(double *i_samples, double *q_samples, int n) {
 // SDRConsole sends TX IQ as two 16-bit signed values per slot.
 static void extract_tx_iq_from_frame(uint8_t *fp) {
     static int pkt_count = 0;
-    int16_t max_i = 0;
+    static int16_t max_mic = 0;
+    static int16_t max_iq = 0;
 
     for (int s = 0; s < 63; s++) {
         uint8_t *sp = fp + 8 + s * 8;
         
-        // Try reading both possible locations to compare
-        int16_t mic_i = (int16_t)((sp[0] << 8) | sp[1]);
+        // Location A: Traditional Mic/Aux (Bytes 0-1)
+        int16_t mic_sample = (int16_t)((sp[0] << 8) | sp[1]);
+        
+        // Location B: High-Speed IQ (Bytes 4-7)
         int16_t i_raw = (int16_t)((sp[4] << 8) | sp[5]);
         int16_t q_raw = (int16_t)((sp[6] << 8) | sp[7]);
 
-        if (abs(i_raw) > max_i) max_i = abs(i_raw);
+        if (abs(mic_sample) > max_mic) max_mic = abs(mic_sample);
+        if (abs(i_raw) > max_iq) max_iq = abs(i_raw);
 
-        // Actual logic
+        // Continue with current logic using Location B
         if (i_raw == 0 && q_raw == 0) continue;
-        
-        double i_val = i_raw / 32768.0;
-        double q_val = q_raw / 32768.0;
-        tx_iq_push_48k(i_val, q_val);
+        tx_iq_push_48k(i_raw / 32768.0, q_raw / 32768.0);
     }
 
-    // Print peak stats every 100 packets (~1.3 seconds of audio)
     if (++pkt_count % 100 == 0) {
-        printf("HPSDR TX Stats: Peak I=%d | Byte0-1 Val=%d\n", max_i, (int16_t)((fp[8]<<8)|fp[9]));
+        printf("DEBUG: Mic-Slot Peak: %d | IQ-Slot Peak: %d\n", max_mic, max_iq);
+        max_mic = 0;
+        max_iq = 0;
     }
 }
 
