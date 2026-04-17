@@ -460,8 +460,8 @@ static int hpsdr_unpack_ep2(const uint8_t *buf, int len, hpsdr_ep2_result_t *res
             int16_t is = (int16_t)(((uint16_t)ptr[4] << 8) | (uint16_t)ptr[5]);
             int16_t qs = (int16_t)(((uint16_t)ptr[6] << 8) | (uint16_t)ptr[7]);
 
-            result->iq[result->n_samples * 2 + 0] = (float)is / 32768.0f * 1000;  // I ADDED A LOT OF GAIN HERE
-            result->iq[result->n_samples * 2 + 1] = (float)qs / 32768.0f * 1000;
+            result->iq[result->n_samples * 2 + 0] = (float)is / 32768.0f * 100;  // I ADDED A LOT OF GAIN HERE
+            result->iq[result->n_samples * 2 + 1] = (float)qs / 32768.0f * 100;
 
             ptr += 8;
             result->n_samples++;
