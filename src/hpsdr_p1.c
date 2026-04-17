@@ -30,6 +30,7 @@
 #define HPSDR_PORT 1024
 #define HPSDR_PKT_SIZE 1032
 #define SAMPLES_PER_PACKET 126
+#define HPSDR_DISCOVERY_REPLY_BYTES 64
 
 static int hpsdr_sock = -1;
 static struct sockaddr_in stream_dest;
