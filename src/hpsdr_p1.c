@@ -26,7 +26,6 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#include "hpsdr_protocol.h"
 
 #define HPSDR_PORT 1024
 #define HPSDR_PKT_SIZE 1032
