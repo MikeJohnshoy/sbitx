@@ -33,6 +33,7 @@
 #define HPSDR_DISCOVERY_REPLY_BYTES 64
 
 static int hpsdr_sock = -1;
+static struct sockaddr_in hpsdr_client_addr;
 static struct sockaddr_in stream_dest;
 static volatile int client_active = 0;
 static volatile int running = 0;
