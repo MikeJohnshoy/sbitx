@@ -470,7 +470,12 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
 
   case 0x01: // EP2 host commands
     if (!client_active) break;
-    if (len >= HPSDR_PKT_SIZE) {
+    // Feed the watchdog if we get a packet of reasonable size
+    if (len > 500) { 
+        ep2_last_time_ms = millis_now();
+    }
+    
+    if (len >= 512) {
 
       ep2_last_time_ms = millis_now(); // feed watchdog on every EP2 packet
 
