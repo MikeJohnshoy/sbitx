@@ -173,8 +173,9 @@ FILE *pf_debug = NULL;
  * Tune this value if the waterfall/spectrum level still does not match the
  * old code — increase to lower the display level, decrease to raise it.
  */
-//#define ADC_SCALE  400000000.0
+
 #define ADC_SCALE  200000000.0
+#define HPSDR_TX_IQ_SCALE 40000000.0  // Added for SDRConsole I/Q scaling
 
 int sbitx_version = SBITX_V2;
 int fwdpower, vswr;
@@ -1861,40 +1862,56 @@ static int tx_process_restart = 1;
 // Since the remote app has already done all SSB generation (filtering, modulation,
 // sideband selection) this is a stripped down version of tx_process()
 static void tx_process_iq(int32_t *input_rx, int32_t *input_mic, int32_t *output_speaker, int32_t *output_tx, int n_samples) {
-    double iq_i[n_samples];
-    double iq_q[n_samples];
-    
-    // 1. Fetch the actual samples from SDRConsole/HPSDR
-    int got = hpsdr_get_tx_iq(iq_i, iq_q, n_samples);
+  // --- Step 2: Signal Tracer ---
+  static int packets_seen = 0;
+  long long magnitude_sum = 0;
+  for (int i = 0; i < n_samples; i++) {
+    // Interleaved I/Q: input_mic[i*2] is I, input_mic[i*2+1] is Q
+    magnitude_sum += abs(input_mic[i * 2]) + abs(input_mic[i * 2 + 1]);
+  }
 
-    // 2. Trace the signal magnitude (This will now show your "Active" message)
-    if (got > 0) {
-        long long magnitude_sum = 0;
-        for (int k = 0; k < got; k++) {
-            magnitude_sum += abs((int)(iq_i[k] * 1000.0));
-        }
-        
-        static int debug_ctr = 0;
-        if (debug_ctr++ % 100 == 0) {
-            printf("IQ Path Active: SDRConsole data detected! Avg Mag: %lld\n", magnitude_sum / got);
-        }
+  // Report every ~1 second (assuming 48k/512 samples per block)
+  if (packets_seen++ % 100 == 0) {
+    if (magnitude_sum > 0) {
+      // Signal detected! SDRConsole is successfully pushing data.
+      printf("IQ Path Active: Avg Magnitude = %lld\n", magnitude_sum / (n_samples * 2));
+    } else {
+      // No signal. The HPSDR code is active, but the buffer is empty.
+      printf("IQ Path Warning: Buffer is empty (all zeros).\n");
     }
+  }
 
-    // 3. Process the samples for the PA
-    float scale = HPSDR_TX_IQ_SCALE * tx_amp * alc_level;
-    for (int i = 0; i < n_samples; i++) {
-        if (i < got) {
-            // Use the data we just fetched
-            output_tx[i] = (int32_t)(iq_i[i] * scale);
-        } else {
-            // Underflow: zero out if HPSDR didn't have enough data
-            output_tx[i] = 0;
-        }
-        output_speaker[i] = 0; 
-    }
+  // fetch 96 kHz (upsampled) IQ from the HPSDR ring buffer
+  double iq_i[n_samples];
+  double iq_q[n_samples];
+  int got = hpsdr_get_tx_iq(iq_i, iq_q, n_samples);
 
-    read_power();
-    sdr_modulation_update(output_tx, n_samples, tx_amp);
+  // if the ring buffer didn't have enough, zero-pad the remainder
+  for (int k = got; k < n_samples; k++) {
+    iq_i[k] = 0.0;
+    iq_q[k] = 0.0;
+  }
+
+  // The IQ from SDRConsole is normalized ±1.0.  We need to scale to what sBitx expects
+  // THIS SCALING NEEDS TO BE SCRUBBED SBITX SEEMS TO LIKE TINY VALUES
+#define HPSDR_TX_IQ_SCALE 40000000.0  // makes that ±1.0 input into a big integer
+  float scale = HPSDR_TX_IQ_SCALE * tx_amp * alc_level;
+
+  // the tx_process output to the PA in original sbitx tx_process is a real signal
+  // so here we just take the real part of the analytic signal from remote app
+  // scale it, and send it on to the output
+  for (int i = 0; i < n_samples; i++) {
+    double sample = iq_i[i];
+    output_tx[i] = (int32_t)(sample * scale);
+    output_speaker[i] = 0; // mute speaker during TX
+  }
+
+  // these calls are here to mirror the function in original tx_process()
+  // ALC / power feedback — reads the PA bridge and adjusts alc_level
+  read_power();
+
+  // Update the TX modulation envelope display
+  sdr_modulation_update(output_tx, n_samples, tx_amp);
 }
 
 void tx_process(
