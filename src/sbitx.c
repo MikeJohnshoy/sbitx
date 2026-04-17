@@ -1907,6 +1907,12 @@ static void tx_process_iq(int32_t *input_rx, int32_t *input_mic, int32_t *output
 
   read_power();
   sdr_modulation_update(output_tx, n_samples, tx_amp);
+
+  // Keep EP6 alive during TX — send silence so the remote SDR client
+  // sees continuous packets with the in_tx flag set in C0.
+  // Without this, EP6 stops → client drops → watchdog forces RX → loop.
+  static double ep6_silence[1024];  // static = zero-initialized
+  hpsdr_send_iq(ep6_silence, ep6_silence, n_samples);
 }
 
 void tx_process(
