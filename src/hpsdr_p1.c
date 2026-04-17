@@ -401,7 +401,7 @@ static void extract_tx_iq_from_frame(uint8_t *fp) {
 
         // Continue with current logic using Location B
         if (i_raw == 0 && q_raw == 0) continue;
-        double boost = 150.0;  // signals from SDRConsole are small!
+        double boost = 2000.0;  // signals from SDRConsole are small!
         tx_iq_push_48k((i_raw * boost) / 32768.0, (q_raw * boost) / 32768.0);
 
     }
