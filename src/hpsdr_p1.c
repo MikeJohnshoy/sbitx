@@ -30,10 +30,8 @@
 #define HPSDR_PORT 1024
 #define HPSDR_PKT_SIZE 1032
 #define SAMPLES_PER_PACKET 126
-#define HPSDR_DISCOVERY_REPLY_BYTES 64
 
 static int hpsdr_sock = -1;
-static struct sockaddr_in hpsdr_client_addr;
 static struct sockaddr_in stream_dest;
 static volatile int client_active = 0;
 static volatile int running = 0;
@@ -60,41 +58,6 @@ static volatile int remote_mox = 0;
 static volatile unsigned long ep2_last_time_ms = 0;
 #define TX_SOFT 2
 
-// Juan's code
-static inline int32_t sx24(const uint8_t *p) {
-  int32_t v = ((int32_t)p[0] << 16) | ((int32_t)p[1] << 8) | (int32_t)p[2];
-  if (v & 0x800000) v |= ~0xFFFFFF;
-  return v;
-}
-
-int protocol_unpack_ep2_iq(const uint8_t *pkt, int len, float *iq_out, int max_samples, int *mox_out, uint32_t *freq_out) {
-  if (!pkt || len < 1032) return 0;
-  const uint8_t *ptr = pkt + 8; // Skip Metis header
-  int out_samples = 0;
-  int mox = 0;
-  uint32_t freq = 0;
-
-  for (int frame = 0; frame < 2; frame++) {
-    uint8_t c0 = ptr[3];
-    if (frame == 0) mox = c0 & 0x01;
-    if (frame == 1 && (c0 == 0x02 || c0 == 0x04)) {
-      freq = ((uint32_t)ptr[4] << 24) | ((uint32_t)ptr[5] << 16) | ((uint32_t)ptr[6] << 8) | (uint32_t)ptr[7];
-    }
-    ptr += 8; // Skip frame header
-    for (int j = 0; j < 63 && out_samples < max_samples; j++) {
-      int16_t is = (int16_t)(((uint16_t)ptr[4] << 8) | (uint16_t)ptr[5]);
-      int16_t qs = (int16_t)(((uint16_t)ptr[6] << 8) | (uint16_t)ptr[7]);
-      iq_out[out_samples * 2 + 0] = (float)is / 32768.0f;
-      iq_out[out_samples * 2 + 1] = (float)qs / 32768.0f;
-      ptr += 8;
-      out_samples++;
-    }
-  }
-  if (mox_out) *mox_out = mox;
-  if (freq_out) *freq_out = freq;
-  return out_samples;
-}
-
 // =============================================================================
 // GTK main-thread callbacks for T/R switching
 //
@@ -111,10 +74,11 @@ static gboolean hpsdr_tx_on_idle(gpointer data) {
 }
 
 static gboolean hpsdr_tx_off_idle(gpointer data) {
+  (void)data;
+  printf("hpsdr_tx_off_idle: in_tx=%d (extern)\n", in_tx);
   tx_off();
-  tr_switch(0);
-  iq_buf_count = 0; // Clear the counter here too
-  return FALSE;
+  printf("hpsdr_tx_off_idle: after tx_off, in_tx=%d (extern)\n", in_tx);
+  return G_SOURCE_REMOVE;
 }
 
 // =============================================================================
@@ -413,106 +377,146 @@ void hpsdr_send_iq(double *i_samples, double *q_samples, int n) {
 // Any T/R transitions are dispatched to the GTK main thread via g_idle_add().
 // =============================================================================
 
-static void hpsdr_reply_discovery(struct sockaddr_in *sender) {
-  uint8_t reply[HPSDR_DISCOVERY_REPLY_BYTES];
-  memset(reply, 0, sizeof(reply));
-
-  reply[0] = 0xEF;
-  reply[1] = 0xFE;
-  reply[2] = 0x02;
-  reply[3] = 0x00; // Status: available
-
-  // Use the fake MAC address from the working code
-  reply[4] = 0x00; reply[5] = 0x1C; reply[6] = 0xC0;
-  reply[7] = 0xA2; reply[8] = 0x22; reply[9] = 0x5B;
-
-  reply[10] = 0x06; // Board type (Hermes/sBitx)
-  reply[11] = 0x25; // Protocol version
-
-  sendto(hpsdr_sock, reply, sizeof(reply), 0, (struct sockaddr *)sender, sizeof(*sender));
-}
-
-static void hpsdr_reply_board_info(struct sockaddr_in *sender) {
-  // For most setups, re-sending the discovery reply or a 60-byte 
-  // status packet works to keep the keep-alive happy.
-  hpsdr_reply_discovery(sender);
-}
-
 // Extract TX IQ audio samples from an EP2 frame.
 // Each frame has 63 audio sample slots at offsets 8..511,
 // each slot is 8 bytes: I(16-bit) Q(16-bit) + 2 padding bytes in P1 TX format.
 // SDRConsole sends TX IQ as two 16-bit signed values per slot.
-void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
-  if (len <= 0)
+static void extract_tx_iq_from_frame(uint8_t *fp) {
+    static int pkt_count = 0;
+    int16_t max_i = 0;
+
+    for (int s = 0; s < 63; s++) {
+        uint8_t *sp = fp + 8 + s * 8;
+        
+        // Try reading both possible locations to compare
+        int16_t mic_i = (int16_t)((sp[0] << 8) | sp[1]);
+        int16_t i_raw = (int16_t)((sp[4] << 8) | sp[5]);
+        int16_t q_raw = (int16_t)((sp[6] << 8) | sp[7]);
+
+        if (abs(i_raw) > max_i) max_i = abs(i_raw);
+
+        // Actual logic
+        if (i_raw == 0 && q_raw == 0) continue;
+        
+        double i_val = i_raw / 32768.0;
+        double q_val = q_raw / 32768.0;
+        tx_iq_push_48k(i_val, q_val);
+    }
+
+    // Print peak stats every 100 packets (~1.3 seconds of audio)
+    if (++pkt_count % 100 == 0) {
+        printf("HPSDR TX Stats: Peak I=%d | Byte0-1 Val=%d\n", max_i, (int16_t)((fp[8]<<8)|fp[9]));
+    }
+}
+
+static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
+  if (len < 4 || buf[0] != 0xEF || buf[1] != 0xFE)
     return;
 
-  // 1. Initial client setup: Lock onto the first sender we see
-  if (!client_active) {
-    memcpy(&hpsdr_client_addr, sender, sizeof(hpsdr_client_addr));
-    client_active = 1;
-    printf("hpsdr: streaming STARTED to %s:%d\n", inet_ntoa(sender->sin_addr),
-           ntohs(sender->sin_port));
-  }
-
-  // 2. Check the HPSDR Endpoint ID (buf[2])
   switch (buf[2]) {
-  case 0x00: // Discovery Request
-    hpsdr_reply_discovery(sender);
-    break;
-
-  case 0x01: // EP2 Host Commands (TX IQ Data and Control)
+  case 0x02: // Discovery request
   {
-    if (!client_active)
-      break;
+    uint8_t reply[64];
+    memset(reply, 0, sizeof(reply));
+    reply[0] = 0xEF;
+    reply[1] = 0xFE;
+    reply[2] = 0x02;
 
-    // Feed the watchdog!
-    ep2_last_time_ms = millis_now();
+    // 0x00 = available, 0x02 = in-use
+    int same_client = (sender->sin_addr.s_addr == stream_dest.sin_addr.s_addr);
+    reply[3] = (client_active && !same_client) ? 0x02 : 0x00;
 
-    int mox = 0;
-    uint32_t new_freq = 0;
-    float iq_temp[252]; 
+    // Fake MAC address & board info (Hermes)
+    reply[4] = 0x00;
+    reply[5] = 0x1C;
+    reply[6] = 0xC0;
+    reply[7] = 0xA2;
+    reply[8] = 0x22;
+    reply[9] = 0x5B;
+    reply[10] = 0x06; // Board type
+    reply[11] = 0x25; // Protocol version
 
-    // Use the helper to unpack the packet structure
-    int samples = protocol_unpack_ep2_iq(buf, len, iq_temp, 126, &mox, &new_freq);
+    sendto(hpsdr_sock, reply, sizeof(reply), 0, (struct sockaddr *)sender, sizeof(*sender));
+  } break;
 
-    // Handle MOX (PTT) state changes
-    if (mox != remote_mox) {
-      remote_mox = mox;
-      printf("hpsdr: MOX %s\n", mox ? "ON" : "OFF");
-      // Use g_idle_add to ensure thread safety with the GTK UI
-      g_idle_add(mox ? hpsdr_tx_on_idle : hpsdr_tx_off_idle, NULL);
-    }
-
-    // Handle Frequency changes
-    if (new_freq > 0 && new_freq != freq_hdr) {
-      freq_hdr = new_freq;
-      char cmd[50];
-      sprintf(cmd, "freq %u", new_freq);
-      remote_execute(cmd);
-    }
-
-    // 3. Only push samples to the mixer if we are actually in TX mode
-    if (remote_mox && samples > 0) {
-      double boost = 10.0; 
-      for (int i = 0; i < samples; i++) {
-        tx_iq_push_48k((double)iq_temp[i * 2] * boost, (double)iq_temp[i * 2 + 1] * boost);
-      }
-    } else {
-      // Clear the local buffer count if not transmitting
+  case 0x04: // Start / stop streaming
+    if (buf[3] & 0x01) {
+      stream_dest = *sender;
+      tx_seq = 0;
       iq_buf_count = 0;
+      // Reset TX IQ state on new connection
+      tx_iq_wr = 0;
+      tx_iq_rd = 0;
+      tx_up_prev_i = 0.0;
+      tx_up_prev_q = 0.0;
+      hpsdr_tx_data_active = 0; // reset data-driven TX state on new connection
+      client_active = 1;
+      remote_mox = 0;
+      ep2_last_time_ms = millis_now(); // don't let watchdog fire immediately
+      printf("hpsdr: streaming STARTED to %s:%d\n", inet_ntoa(stream_dest.sin_addr),
+             ntohs(stream_dest.sin_port));
+    } else {
+      client_active = 0;
+      remote_mox = 0;
+      printf("hpsdr: streaming STOPPED\n");
+
+      // Safety catch: If the client disconnected while transmitting, turn it off
+      if (hpsdr_tx_data_active) {
+        hpsdr_tx_data_active = 0;
+        g_idle_add(hpsdr_tx_off_idle, NULL);
+      }
     }
     break;
-  }
 
-  case 0x02: // Board Info / Status Request
-    hpsdr_reply_board_info(sender);
-    break;
+  case 0x01: // EP2 host commands
+    if (!client_active) break;
+    if (len >= HPSDR_PKT_SIZE) {
 
-  default:
+      ep2_last_time_ms = millis_now(); // feed watchdog on every EP2 packet
+
+      for (int frame = 0; frame < 2; frame++) {
+        uint8_t *fp = buf + 8 + frame * 512;
+        if (fp[0] != 0x7F || fp[1] != 0x7F || fp[2] != 0x7F)
+          continue;
+
+        int c0 = fp[3];
+        int addr = (c0 >> 1) & 0x1F;
+        int mox = c0 & 0x01;
+        printf("hpsdr: frame %d c0=0x%02x addr=0x%02x mox=%d\n", frame, c0, addr, mox);
+
+        // MOX transition — edge triggered TX on/off
+        if (mox != remote_mox) {
+          remote_mox = mox;
+          printf("hpsdr: MOX %s\n", mox ? "ON" : "OFF");
+          if (mox) {
+            hpsdr_tx_data_active = 1;
+            g_idle_add(hpsdr_tx_on_idle, NULL);
+          } else {
+            hpsdr_tx_data_active = 0;
+            tx_iq_wr = 0;
+            tx_iq_rd = 0;
+            g_idle_add(hpsdr_tx_off_idle, NULL);
+          }
+        }
+
+        if (addr == 0x02) {
+          int f = (fp[4] << 24) | (fp[5] << 16) | (fp[6] << 8) | fp[7];
+          if (f > 0 && f != freq_hdr) {
+            printf("hpsdr: remote set freq %d Hz\n", f);
+            char cmd[50];
+            sprintf(cmd, "freq %d", f);
+            remote_execute(cmd);
+          }
+        }
+
+        if (mox)
+          extract_tx_iq_from_frame(fp);
+      }
+    }
     break;
   }
 }
-    
+
 static void *hpsdr_poll_thread(void *arg) {
   (void)arg;
   uint8_t buf[2048];
@@ -589,8 +593,7 @@ void hpsdr_poll(void) {
   static int started = 0;
   if (!started && running) {
     pthread_create(&poll_thread, NULL, hpsdr_poll_thread, NULL);
-    // TAKE THIS OUT FOR DEBUGGING
-    //g_timeout_add(250, hpsdr_watchdog, NULL); // fire every 250 ms on GTK thread
+    g_timeout_add(250, hpsdr_watchdog, NULL); // fire every 250 ms on GTK thread
     started = 1;
   }
 }
