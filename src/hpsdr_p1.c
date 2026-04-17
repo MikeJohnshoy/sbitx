@@ -383,33 +383,29 @@ void hpsdr_send_iq(double *i_samples, double *q_samples, int n) {
 // SDRConsole sends TX IQ as two 16-bit signed values per slot.
 static void extract_tx_iq_from_frame(uint8_t *fp) {
     static int pkt_count = 0;
-    static int16_t max_mic = 0;
-    static int16_t max_iq = 0;
+    static double max_boosted_mag = 0; // Track the final double value
 
     for (int s = 0; s < 63; s++) {
         uint8_t *sp = fp + 8 + s * 8;
-        
-        // Location A: Traditional Mic/Aux (Bytes 0-1)
-        int16_t mic_sample = (int16_t)((sp[0] << 8) | sp[1]);
-        
-        // Location B: High-Speed IQ (Bytes 4-7)
         int16_t i_raw = (int16_t)((sp[4] << 8) | sp[5]);
         int16_t q_raw = (int16_t)((sp[6] << 8) | sp[7]);
 
-        if (abs(mic_sample) > max_mic) max_mic = abs(mic_sample);
-        if (abs(i_raw) > max_iq) max_iq = abs(i_raw);
-
-        // Continue with current logic using Location B
         if (i_raw == 0 && q_raw == 0) continue;
-        double boost = 2000.0;  // signals from SDRConsole are small!
-        tx_iq_push_48k((i_raw * boost) / 32768.0, (q_raw * boost) / 32768.0);
 
+        double boost = 1000.0; 
+        double i_final = (i_raw * boost) / 32768.0;
+        double q_final = (q_raw * boost) / 32768.0;
+
+        // Track the peak of the boosted signal (should be between 0.0 and 1.0)
+        double mag = sqrt(i_final*i_final + q_final*q_final);
+        if (mag > max_boosted_mag) max_boosted_mag = mag;
+
+        tx_iq_push_48k(i_final, q_final);
     }
 
     if (++pkt_count % 100 == 0) {
-        printf("DEBUG: Mic-Slot Peak: %d | IQ-Slot Peak: %d\n", max_mic, max_iq);
-        max_mic = 0;
-        max_iq = 0;
+        printf("DEBUG: Boosted Peak Mag: %.4f (Goal is ~0.5)\n", max_boosted_mag);
+        max_boosted_mag = 0;
     }
 }
 
