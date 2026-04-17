@@ -1897,9 +1897,12 @@ static void tx_process_iq(int32_t *input_rx, int32_t *input_mic, int32_t *output
   // 4. Scale and Output
   float scale = HPSDR_TX_IQ_SCALE * tx_amp * alc_level;
   for (int i = 0; i < n_samples; i++) {
-    output_tx[i] = (int32_t)(iq_i[i] * scale);
-    // Optional: sidetone to hear the SDRConsole audio
-    output_speaker[i] = output_tx[i] / 100; 
+    // Subtract that ~1215 offset seen in your logs to clean the carrier
+    double i_clean = iq_i[i] - (1215.0 / 32768.0); 
+    output_tx[i] = (int32_t)(i_clean * scale);
+    
+    // Boost sidetone so you can verify the audio with your ears
+    output_speaker[i] = output_tx[i] / 10; 
   }
 
   read_power();
