@@ -441,7 +441,7 @@ static int hpsdr_unpack_ep2(const uint8_t *buf, int len, hpsdr_ep2_result_t *res
         }
 
         uint8_t c0 = ptr[3];
-        int addr = (c0 >> 1) & 0x1F;   // your correct parsing
+        uint8_t addr = (c0 >> 1) & 0x7F;   // Juan's change parsing
         int mox  = c0 & 0x01;
 
         result->mox |= mox;   // TX if *either* frame asserts MOX
