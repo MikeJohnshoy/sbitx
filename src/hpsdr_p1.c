@@ -442,16 +442,17 @@ static int hpsdr_unpack_ep2(const uint8_t *buf, int len, hpsdr_ep2_result_t *res
         }
 
         uint8_t c0 = ptr[3];
-        uint8_t addr = (c0 >> 1) & 0x7F;   // Juan's changes
+        uint8_t addr = (c0 >> 1) & 0x7F;   // Juan's change
         int mox  = c0 & 0x01;
 
         result->mox |= mox;   // TX if *either* frame asserts MOX
 
-        if (addr == 0x01 || addr == 0x02) {
-           result->freq = ((uint32_t)ptr[4] << 24) |
-                          ((uint32_t)ptr[5] << 16) |
-                          ((uint32_t)ptr[6] <<  8) |
-                          ((uint32_t)ptr[7]);
+        // Only update freq from the TX C&C address
+        if (addr == 0x02) {
+            result->freq = ((uint32_t)ptr[4] << 24) |
+                           ((uint32_t)ptr[5] << 16) |
+                           ((uint32_t)ptr[6] <<  8) |
+                           ((uint32_t)ptr[7]);
         }
 
         ptr += 8;  // skip sync + C&C header
