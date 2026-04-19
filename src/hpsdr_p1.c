@@ -250,7 +250,7 @@ static gboolean hpsdr_watchdog(gpointer data) {
 // =============================================================================
 
 static void build_and_send_packet(void) {
-  uint8_t pkt[];
+  uint8_t pkt[HPSDR_PKT_SIZE];
   memset(pkt, 0, sizeof(pkt));
 
   // EP6 Header
