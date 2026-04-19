@@ -421,6 +421,7 @@ static void hpsdr_build_discovery_reply(uint8_t *reply, int in_use)
     reply[9]  = 0x5B;
     reply[10] = 0x06;  // board type (Hermes)
     reply[11] = 0x25;  // protocol version
+    reply[19] = 0x01;  // number of receivers = 1
 }
 
 static int hpsdr_unpack_ep2(const uint8_t *buf, int len, hpsdr_ep2_result_t *result)
