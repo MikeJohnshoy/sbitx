@@ -14,7 +14,7 @@
 #define PKT_START     2
 #define PKT_STOP      3
 #define PKT_EP2       4
-#define HPSDR_DISCOVERY_REPLY   64
+#define HPSDR_DISCOVERY_REPLY   60
 
 
 typedef struct {
