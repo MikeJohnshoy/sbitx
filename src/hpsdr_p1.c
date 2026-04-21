@@ -209,11 +209,21 @@ void hpsdr_send_iq(double *i_samples, double *q_samples, int n) {
 // =============================================================================
 // HPSDR PROTOCOL 1 IMPLEMENTATION
 // =============================================================================
+//
+// Data flow:
+//   Inbound  (SDR app → sBitx): PKT_DISCOVERY, PKT_START, PKT_STOP, PKT_EP2
+//   Outbound (sBitx → SDR app): EP6 RX IQ stream
+//
+// Read order follows the flow: classify → inbound handlers → outbound builder
+//                              → session management → top-level dispatcher
 
+// Protocol statics
 static volatile int remote_mox = 0;
 static volatile unsigned long ep2_last_time_ms = 0;
 #define EP2_WATCHDOG_MS 3500 // only for crash/disconnect
 
+// Packet classification
+// Identify the type of every inbound packet before dispatching.
 static int hpsdr_classify(const uint8_t *buf, int len) {
   if (len < 4 || buf[0] != 0xEF || buf[1] != 0xFE)
     return PKT_UNKNOWN;
@@ -231,6 +241,8 @@ static int hpsdr_classify(const uint8_t *buf, int len) {
   }
 }
 
+// Inbound: Discovery (PKT_DISCOVERY)
+// Build a discovery reply. in_use signals whether we already have a client.
 static void hpsdr_build_discovery_reply(uint8_t *reply, int in_use) {
   memset(reply, 0, HPSDR_DISCOVERY_REPLY);
   reply[0] = 0xEF;
@@ -248,11 +260,54 @@ static void hpsdr_build_discovery_reply(uint8_t *reply, int in_use) {
   reply[19] = 0x01; // number of receivers = 1
 }
 
+// Inbound: EP2 (PKT_EP2 — TX IQ + C&C from SDR app)
+// Unpack one EP2 packet: extract MOX bit, TX frequency, and TX IQ samples.
+// Returns the number of IQ sample pairs unpacked.
+static int hpsdr_unpack_ep2(const uint8_t *buf, int len, hpsdr_ep2_result_t *result) {
+  if (!buf || len < HPSDR_PKT_SIZE)
+    return 0;
+  result->mox = 0;
+  result->freq = 0;
+  result->n_samples = 0;
+
+  const uint8_t *ptr = buf + 8; // skip Metis header
+  for (int frame = 0; frame < 2; frame++) {
+    if (ptr[0] != 0x7F || ptr[1] != 0x7F || ptr[2] != 0x7F) {
+      ptr += 512;
+      continue;
+    }
+    uint8_t c0 = ptr[3];
+    uint8_t addr = (c0 >> 1) & 0x7F;
+    int mox = c0 & 0x01;
+    result->mox |= mox; // TX if *either* frame asserts MOX
+
+    // Only update freq from the TX C&C address
+    if (addr == 0x02) {
+      result->freq = ((uint32_t)ptr[4] << 24) | ((uint32_t)ptr[5] << 16) |
+                     ((uint32_t)ptr[6] << 8) | ((uint32_t)ptr[7]);
+    }
+
+    ptr += 8; // skip sync + C&C header
+    for (int j = 0; j < 63 && result->n_samples < SAMPLES_PER_PKT; j++) {
+      int16_t is = (int16_t)(((uint16_t)ptr[4] << 8) | (uint16_t)ptr[5]);
+      int16_t qs = (int16_t)(((uint16_t)ptr[6] << 8) | (uint16_t)ptr[7]);
+      result->iq[result->n_samples * 2 + 0] = (float)is / 32768.0f * hpsdr_tx_gain;
+      result->iq[result->n_samples * 2 + 1] = (float)qs / 32768.0f * hpsdr_tx_gain;
+      ptr += 8;
+      result->n_samples++;
+    }
+  }
+  return result->n_samples;
+}
+
+// Outbound: EP6 (RX IQ stream to SDR app)
+// Build and send one EP6 packet containing two frames of 63 IQ sample pairs,
+// plus C&C bytes reporting current sBitx state (T/R status, frequency).
 static void build_and_send_packet(void) {
   uint8_t pkt[HPSDR_PKT_SIZE];
   memset(pkt, 0, sizeof(pkt));
 
-  // EP6 Header
+  // EP6 header
   pkt[0] = 0xEF;
   pkt[1] = 0xFE;
   pkt[2] = 0x01;
@@ -273,51 +328,44 @@ static void build_and_send_packet(void) {
     fp[1] = 0x7F;
     fp[2] = 0x7F;
 
-    // C&C control bytes (cycle through C0 addresses 0 and 1)
+    // C&C bytes: cycle through C0 addresses 0 and 1 across packets
     int cc_addr = (seq_for_cc * 2 + frame) % 2;
     fp[3] = (cc_addr << 1) | (in_tx ? 1 : 0);
 
     if (cc_addr == 0) {
+      // C0=0: report current RX frequency
       fp[4] = (freq_hdr >> 24) & 0xFF;
       fp[5] = (freq_hdr >> 16) & 0xFF;
       fp[6] = (freq_hdr >> 8) & 0xFF;
       fp[7] = freq_hdr & 0xFF;
     } else if (cc_addr == 1) {
-      fp[4] = 0x00; // 48 kHz, no ADC overflow
+      // C0=1: sample rate + ADC overflow flags (48 kHz, no overflow)
+      fp[4] = 0x00;
       fp[5] = 0x00;
       fp[6] = 0x00;
       fp[7] = 0x00;
     }
 
-    // 63 IQ samples per frame
+    // 63 IQ sample pairs per frame, packed as 24-bit big-endian
     for (int s = 0; s < 63; s++) {
       int idx = frame * 63 + s;
       uint8_t *sp = fp + 8 + s * 8;
 
       int32_t i_val = (int32_t)(iq_buf_i[idx] * 559240.0);
-      if (i_val > 8388607)
-        i_val = 8388607;
-      if (i_val < -8388608)
-        i_val = -8388608;
+      if (i_val > 8388607)  i_val = 8388607;
+      if (i_val < -8388608) i_val = -8388608;
 
       int32_t q_val = (int32_t)(iq_buf_q[idx] * 559240.0);
-      if (q_val > 8388607)
-        q_val = 8388607;
-      if (q_val < -8388608)
-        q_val = -8388608;
+      if (q_val > 8388607)  q_val = 8388607;
+      if (q_val < -8388608) q_val = -8388608;
 
-      // Pack I
-      sp[0] = (i_val >> 16) & 0xFF;
-      sp[1] = (i_val >> 8) & 0xFF;
-      sp[2] = i_val & 0xFF;
-
-      // Pack Q
-      sp[3] = (q_val >> 16) & 0xFF;
-      sp[4] = (q_val >> 8) & 0xFF;
-      sp[5] = q_val & 0xFF;
-
-      // Mic sample (unused)
-      sp[6] = 0;
+      sp[0] = (i_val >> 16) & 0xFF; // I
+      sp[1] = (i_val >> 8)  & 0xFF;
+      sp[2] =  i_val        & 0xFF;
+      sp[3] = (q_val >> 16) & 0xFF; // Q
+      sp[4] = (q_val >> 8)  & 0xFF;
+      sp[5] =  q_val        & 0xFF;
+      sp[6] = 0; // Mic (unused)
       sp[7] = 0;
     }
   }
@@ -327,44 +375,8 @@ static void build_and_send_packet(void) {
   }
 }
 
-static int hpsdr_unpack_ep2(const uint8_t *buf, int len, hpsdr_ep2_result_t *result) {
-  if (!buf || len < HPSDR_PKT_SIZE)
-    return 0;
-  result->mox = 0;
-  result->freq = 0;
-  result->n_samples = 0;
-
-  const uint8_t *ptr = buf + 8; // skip Metis header
-  for (int frame = 0; frame < 2; frame++) {
-    if (ptr[0] != 0x7F || ptr[1] != 0x7F || ptr[2] != 0x7F) {
-      ptr += 512;
-      continue;
-    }
-    uint8_t c0 = ptr[3];
-    uint8_t addr = (c0 >> 1) & 0x7F; // Juan's change
-    int mox = c0 & 0x01;
-    result->mox |= mox; // TX if *either* frame asserts MOX
-
-    // Only update freq from the TX C&C address
-    if (addr == 0x02) {
-      result->freq = ((uint32_t)ptr[4] << 24) | ((uint32_t)ptr[5] << 16) |
-                     ((uint32_t)ptr[6] << 8) | ((uint32_t)ptr[7]);
-    }
-
-    ptr += 8; // skip sync + C&C header
-    for (int j = 0; j < 63 && result->n_samples < SAMPLES_PER_PKT; j++) {
-      int16_t is = (int16_t)(((uint16_t)ptr[4] << 8) | (uint16_t)ptr[5]);
-      int16_t qs = (int16_t)(((uint16_t)ptr[6] << 8) | (uint16_t)ptr[7]);
-      result->iq[result->n_samples * 2 + 0] =
-          (float)is / 32768.0f * hpsdr_tx_gain; // gain is added here
-      result->iq[result->n_samples * 2 + 1] = (float)qs / 32768.0f * hpsdr_tx_gain;
-      ptr += 8;
-      result->n_samples++;
-    }
-  }
-  return result->n_samples;
-}
-
+// Session management
+// Reset all TX-related state. Called on PKT_START, PKT_STOP, and watchdog timeout.
 static void reset_all_tx_state(void) {
   flush_tx_ring();
   hpsdr_tx_data_active = 0;
@@ -372,9 +384,13 @@ static void reset_all_tx_state(void) {
   ep2_last_time_ms = millis_now();
 }
 
+// Top-level packet dispatcher
+// Classify each inbound packet and route it to the appropriate handler.
+// For EP2, state translation functions are called after unpacking.
 static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
   int type = hpsdr_classify(buf, len);
   switch (type) {
+
   case PKT_DISCOVERY: {
     uint8_t reply[HPSDR_DISCOVERY_REPLY];
     int same = (sender->sin_addr.s_addr == stream_dest.sin_addr.s_addr);
@@ -382,6 +398,7 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     sendto(hpsdr_sock, reply, sizeof(reply), 0, (struct sockaddr *)sender, sizeof(*sender));
     break;
   }
+
   case PKT_START:
     stream_dest = *sender;
     tx_seq = 0;
@@ -391,6 +408,7 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     printf("hpsdr: streaming STARTED to %s:%d\n", inet_ntoa(stream_dest.sin_addr),
            ntohs(stream_dest.sin_port));
     break;
+
   case PKT_STOP:
     client_active = 0;
     printf("hpsdr: streaming STOPPED\n");
@@ -403,24 +421,26 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     }
     remote_mox = 0;
     break;
+
   case PKT_EP2: {
-      if (!client_active)
-        break;
-      ep2_last_time_ms = millis_now();
-      hpsdr_ep2_result_t r;
-      hpsdr_unpack_ep2(buf, len, &r);
-  
-      apply_freq_from_ep2(r.freq);
-      apply_mox_from_ep2(r.mox);
-  
-      // --- TX IQ data (only when MOX is active) ---
-      if (r.mox && r.n_samples > 0) {
-        for (int k = 0; k < r.n_samples; k++)
-          tx_iq_push_48k((double)r.iq[k * 2], (double)r.iq[k * 2 + 1]);
-      }
+    if (!client_active)
       break;
+    ep2_last_time_ms = millis_now();
+    hpsdr_ep2_result_t r;
+    hpsdr_unpack_ep2(buf, len, &r);
+
+    apply_freq_from_ep2(r.freq);
+    apply_mox_from_ep2(r.mox);
+
+    // TX IQ data — push into ring buffer for audio thread (only when MOX active)
+    if (r.mox && r.n_samples > 0) {
+      for (int k = 0; k < r.n_samples; k++)
+        tx_iq_push_48k((double)r.iq[k * 2], (double)r.iq[k * 2 + 1]);
     }
+    break;
   }
+
+  } // switch end
 }
 
 // =============================================================================
