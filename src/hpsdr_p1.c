@@ -1,23 +1,16 @@
-// hpsdr_p1.c — openHPSDR Protocol 1 interface for sBitx
+// hpsdr_p1.c — HPSDR Protocol 1 interface for sBitx
 //
-// Implements a minimal P1 SDR server that integrates with the sBitx audio pipeline:
-//
-//   RX path: sBitx audio thread calls hpsdr_send_iq() with 96kHz baseband IQ.
-//            Samples are low-pass filtered and decimated 2:1 to 48kHz, then
-//            packed into EP6 UDP frames and streamed to the connected SDR client.
-//
-//   TX path: The background poll thread receives EP2 UDP frames from the SDR client.
-//            48kHz TX IQ samples are extracted, interpolated back to 96kHz, and
-//            written into a lock-free ring buffer for sound_process() to consume.
-//            TX is triggered automatically when IQ data starts arriving and
-//            released 500ms after the last sample — no explicit PTT parsing needed.
-//
-//   Control: Discovery, start/stop, and frequency commands are handled by the
-//            poll thread. T/R switching is dispatched to the GTK main thread via
-//            g_idle_add() to stay clear of the audio and UI threads.
-//
-// Code initially generated to demonstratd exporting I and Q data to an external app.
-// incorporated code from Juan WP3DN protocol.c 
+// Provide the interface between the sbitx and an external SDR app using hpsdr Protocol 1
+// Major functions are:
+//   Signal processing:  
+//    - manage a data buffer to prevent dropping data between the sbitx and external app
+//    - perform data rate conversion between sbitx intenal 96k samples per second
+//      and the external SDR app 48k samples per second
+//   HPSDR Protocol 1: 
+//    - identify packet types
+//    - add or extract I and Q and other controls and data, and copy in and out of buffer
+//  Initialization control and shutdown
+//    - sbitx.c need to start and stop and get status on this interface
 
 #include <arpa/inet.h>
 #include <gtk/gtk.h>
