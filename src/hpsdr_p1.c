@@ -39,7 +39,6 @@ static void build_and_send_packet(void);
 static int hpsdr_unpack_ep2(const uint8_t *buf, int len, hpsdr_ep2_result_t *result);
 static void reset_all_tx_state(void);
 static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender);
-static volatile uint8_t last_requested_addr = 0;
 
 // State Translation (Section 3)
 static void apply_freq_from_ep2(uint32_t freq);
@@ -258,8 +257,7 @@ static void hpsdr_build_discovery_reply(uint8_t *reply, int in_use) {
   reply[9] = 0x5B;
   reply[10] = 0x06; // board type (Hermes)
   reply[11] = 0x25; // protocol version
-  reply[15] = 0x01; // number of receivers = 1
-  reply[19] = 0x00; // was wrongly set
+  reply[19] = 0x01; // number of receivers = 1
 }
 
 // Inbound: EP2 (PKT_EP2 — TX IQ + C&C from SDR app)
@@ -293,8 +291,8 @@ static int hpsdr_unpack_ep2(const uint8_t *buf, int len, hpsdr_ep2_result_t *res
 
     ptr += 8; // skip sync + C&C header
     for (int j = 0; j < 63 && result->n_samples < SAMPLES_PER_PKT; j++) {
-      int16_t is = (int16_t)(((uint16_t)ptr[0] << 8) | (uint16_t)ptr[1]);
-      int16_t qs = (int16_t)(((uint16_t)ptr[2] << 8) | (uint16_t)ptr[3]);
+      int16_t is = (int16_t)(((uint16_t)ptr[4] << 8) | (uint16_t)ptr[5]);
+      int16_t qs = (int16_t)(((uint16_t)ptr[6] << 8) | (uint16_t)ptr[7]);
       result->iq[result->n_samples * 2 + 0] = (float)is / 32768.0f * hpsdr_tx_gain;
       result->iq[result->n_samples * 2 + 1] = (float)qs / 32768.0f * hpsdr_tx_gain;
       ptr += 8;
@@ -332,42 +330,25 @@ static void build_and_send_packet(void) {
     fp[1] = 0x7F;
     fp[2] = 0x7F;
 
-    // C&C bytes: frame 0 always reports addr 0 (hardware status).
-    // Frame 1 cycles through addresses 1, 2, 3 so all clients see
-    // their register readbacks without a mirroring hack.
-    static uint8_t cc_cycle = 1; // next addr for frame 1; cycles 1→2→3→1
-    int cc_addr = (frame == 0) ? 0 : cc_cycle;
-    fp[3] = (uint8_t)((cc_addr << 1) | (in_tx ? 1 : 0));
+    // C&C bytes: cycle through C0 addresses 0 and 1 across packets
+    int cc_addr = (seq_for_cc * 2 + frame) % 2;
+    fp[3] = (cc_addr << 1) | (in_tx ? 1 : 0);
 
     if (cc_addr == 0) {
-      // Addr 0: hardware status word
-      fp[4] = (in_tx ? 0x01 : 0x00); // PTT status
-      fp[5] = 0x00;                    // ADC overflow = none
-      fp[6] = 0x38;                    // firmware version — Hermes-compatible
+      // C0=0: hardware status word
+      // C1 bit 0 = PTT; bits 4-7 = ADC overflow (none)
+      fp[4] = (in_tx ? 0x01 : 0x00);
+      fp[5] = 0x00;  // ADC overflow = none
+      fp[6] = 0x19;  // firmware version (25 = Hermes-compatible)
       fp[7] = 0x00;
     } else if (cc_addr == 1) {
-      // Addr 1: TX NCO frequency
-      uint32_t f = (uint32_t)freq_hdr;
-      fp[4] = (f >> 24) & 0xFF;
-      fp[5] = (f >> 16) & 0xFF;
-      fp[6] = (f >>  8) & 0xFF;
-      fp[7] =  f        & 0xFF;
-    } else if (cc_addr == 2) {
-      // Addr 2: RX NCO frequency (same as TX for simplex operation)
-      uint32_t f = (uint32_t)freq_hdr;
-      fp[4] = (f >> 24) & 0xFF;
-      fp[5] = (f >> 16) & 0xFF;
-      fp[6] = (f >>  8) & 0xFF;
-      fp[7] =  f        & 0xFF;
-    } else {
-      // Addr 3+: not yet implemented — report zeros
-      fp[4] = fp[5] = fp[6] = fp[7] = 0x00;
+      // C0=1: report current RX frequency
+      fp[4] = (freq_hdr >> 24) & 0xFF;
+      fp[5] = (freq_hdr >> 16) & 0xFF;
+      fp[6] = (freq_hdr >> 8)  & 0xFF;
+      fp[7] =  freq_hdr        & 0xFF;
     }
 
-    // Advance the cycle after frame 1 is written
-    if (frame == 1)
-      cc_cycle = (cc_cycle >= 3) ? 1 : (cc_cycle + 1);
-    
     // 63 IQ sample pairs per frame, packed as 24-bit big-endian
     for (int s = 0; s < 63; s++) {
       int idx = frame * 63 + s;
@@ -451,10 +432,7 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     hpsdr_ep2_result_t r;
     hpsdr_unpack_ep2(buf, len, &r);
 
-    last_requested_addr = (buf[11] >> 1) & 0x7F; // Extracting from the C0 byte
-
-    uint32_t active_freq = (r.mox && r.tx_freq) ? r.tx_freq
-                     : (r.freq ? r.freq : r.tx_freq);
+    uint32_t active_freq = (r.mox && r.tx_freq) ? r.tx_freq : r.freq;
     apply_freq_from_ep2(active_freq);
     apply_mox_from_ep2(r.mox);
 
