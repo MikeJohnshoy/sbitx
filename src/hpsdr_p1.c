@@ -40,8 +40,12 @@ static int hpsdr_unpack_ep2(const uint8_t *buf, int len, hpsdr_ep2_result_t *res
 static void reset_all_tx_state(void);
 static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender);
 
-// Initialization, Control & Shutdown (Section 3)
+// State Translation (Section 3)
+static void apply_freq_from_ep2(uint32_t freq);
+static void apply_mox_from_ep2(int mox);
 static gboolean hpsdr_tr_idle(gpointer data);
+
+// Initialization, Control & Shutdown (Section 4)
 static gboolean hpsdr_watchdog(gpointer data);
 static void *hpsdr_poll_thread(void *arg);
 // Public: hpsdr_init, hpsdr_stop, hpsdr_is_connected, hpsdr_poll (defined in .h)
@@ -400,76 +404,101 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     remote_mox = 0;
     break;
   case PKT_EP2: {
-    if (!client_active)
-      break;
-    ep2_last_time_ms = millis_now();
-    hpsdr_ep2_result_t r;
-    hpsdr_unpack_ep2(buf, len, &r);
-
-    // --- Frequency ---
-    if (r.freq > 0 && r.freq != (uint32_t)freq_hdr) {
-      printf("hpsdr: remote set freq %d Hz\n", r.freq);
-      char cmd[50];
-      sprintf(cmd, "freq %d", r.freq);
-      remote_execute(cmd);
-    }
-
-    // --- MOX state machine (debounced, coalesced) ---
-    {
-      static int mox_count = 0;
-      static int mox_pending_state = 0;
-
-      if (r.mox != remote_mox) {
-        // MOX differs from current state — count consecutive matches
-        if (r.mox != mox_pending_state) {
-          // Direction changed again — restart counter
-          mox_pending_state = r.mox;
-          mox_count = 1;
-        } else {
-          mox_count++;
-        }
-
-        if (mox_count >= 4) {
-          // Stable for ~4 packets (~10 ms) — commit the transition
-          remote_mox = mox_pending_state;
-          mox_count = 0;
-          if (remote_mox) {
-            hpsdr_tx_data_active = 1;
-            printf("hpsdr: MOX ON (debounced)\n");
-            if (tr_pending != 1) {
-              tr_pending = 1;
-              g_idle_add(hpsdr_tr_idle, NULL);
-            }
-          } else {
-            hpsdr_tx_data_active = 0;
-            flush_tx_ring();
-            printf("hpsdr: MOX OFF (debounced)\n");
-            if (tr_pending != 2) {
-              tr_pending = 2;
-              g_idle_add(hpsdr_tr_idle, NULL);
-            }
-          }
-        }
-      } else {
-        // MOX matches current state — reset debounce
-        mox_count = 0;
-        mox_pending_state = remote_mox;
+      if (!client_active)
+        break;
+      ep2_last_time_ms = millis_now();
+      hpsdr_ep2_result_t r;
+      hpsdr_unpack_ep2(buf, len, &r);
+  
+      apply_freq_from_ep2(r.freq);
+      apply_mox_from_ep2(r.mox);
+  
+      // --- TX IQ data (only when MOX is active) ---
+      if (r.mox && r.n_samples > 0) {
+        for (int k = 0; k < r.n_samples; k++)
+          tx_iq_push_48k((double)r.iq[k * 2], (double)r.iq[k * 2 + 1]);
       }
+      break;
     }
-
-    // --- TX IQ data (only when MOX is active) ---
-    if (r.mox && r.n_samples > 0) {
-      for (int k = 0; k < r.n_samples; k++)
-        tx_iq_push_48k((double)r.iq[k * 2], (double)r.iq[k * 2 + 1]);
-    }
-    break;
-  }
   }
 }
 
 // =============================================================================
 // STATE TRANSLATION
 // =============================================================================
+// These functions translate state from HPSDR Protocol 1 into sBitx state.
+// Future additions: gain settings, band info, antenna selection, etc.
+
+// Apply a frequency received from an EP2 packet to the sBitx.
+static void apply_freq_from_ep2(uint32_t freq) {
+  if (freq > 0 && freq != (uint32_t)freq_hdr) {
+    printf("hpsdr: remote set freq %d Hz\n", freq);
+    char cmd[50];
+    sprintf(cmd, "freq %d", freq);
+    remote_execute(cmd);
+  }
+}
+
+// Translate the MOX bit from EP2 into a debounced sBitx T/R switch action.
+// Requires 4 consecutive consistent packets (~10 ms) before committing.
+static void apply_mox_from_ep2(int mox) {
+  static int mox_count = 0;
+  static int mox_pending_state = 0;
+
+  if (mox != remote_mox) {
+    // MOX differs from current state — count consecutive matches
+    if (mox != mox_pending_state) {
+      // Direction changed again — restart counter
+      mox_pending_state = mox;
+      mox_count = 1;
+    } else {
+      mox_count++;
+    }
+
+    if (mox_count >= 4) {
+      // Stable for ~4 packets (~10 ms) — commit the transition
+      remote_mox = mox_pending_state;
+      mox_count = 0;
+      if (remote_mox) {
+        hpsdr_tx_data_active = 1;
+        printf("hpsdr: MOX ON (debounced)\n");
+        if (tr_pending != 1) {
+          tr_pending = 1;
+          g_idle_add(hpsdr_tr_idle, NULL);
+        }
+      } else {
+        hpsdr_tx_data_active = 0;
+        flush_tx_ring();
+        printf("hpsdr: MOX OFF (debounced)\n");
+        if (tr_pending != 2) {
+          tr_pending = 2;
+          g_idle_add(hpsdr_tr_idle, NULL);
+        }
+      }
+    }
+  } else {
+    // MOX matches current state — reset debounce
+    mox_count = 0;
+    mox_pending_state = remote_mox;
+  }
+}
+
+// GTK idle callback to apply a pending T/R switch on the GTK main thread.
+// tr_pending: 0 = nothing, 1 = tx_on pending, 2 = tx_off pending
+static gboolean hpsdr_tr_idle(gpointer data) {
+  (void)data;
+  int action = tr_pending;
+  tr_pending = 0;
+
+  if (action == 1 && !in_tx) {
+    printf("hpsdr_tr_idle: switching to TX\n");
+    tx_on(TX_SOFT);
+  } else if (action == 2) {
+    printf("hpsdr_tr_idle: switching to RX (in_tx=%d)\n", in_tx);
+    tx_off();
+  }
+  return G_SOURCE_REMOVE;
+}
 
 // =============================================================================
 // INITIALIZATION, CONTROL & SHUTDOWN
