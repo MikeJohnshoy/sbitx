@@ -9,7 +9,7 @@
 //   HPSDR Protocol 1:
 //    - identify packet types
 //    - add or extract I and Q and other controls and data, and copy in and out of buffer
-//   Stater translation
+//   State translation (sBitx <=> SDR application)
 //    - coordinate state between sBitx and external SDR app (T/R switch, freq, gain settings,
 //      etc.
 //   Initialization control and shutdown
