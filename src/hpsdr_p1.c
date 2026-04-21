@@ -292,8 +292,8 @@ static int hpsdr_unpack_ep2(const uint8_t *buf, int len, hpsdr_ep2_result_t *res
 
     ptr += 8; // skip sync + C&C header
     for (int j = 0; j < 63 && result->n_samples < SAMPLES_PER_PKT; j++) {
-      int16_t is = (int16_t)(((uint16_t)ptr[4] << 8) | (uint16_t)ptr[5]);
-      int16_t qs = (int16_t)(((uint16_t)ptr[6] << 8) | (uint16_t)ptr[7]);
+      int16_t is = (int16_t)(((uint16_t)ptr[0] << 8) | (uint16_t)ptr[1]);
+      int16_t qs = (int16_t)(((uint16_t)ptr[2] << 8) | (uint16_t)ptr[3]);
       result->iq[result->n_samples * 2 + 0] = (float)is / 32768.0f * hpsdr_tx_gain;
       result->iq[result->n_samples * 2 + 1] = (float)qs / 32768.0f * hpsdr_tx_gain;
       ptr += 8;
@@ -331,24 +331,42 @@ static void build_and_send_packet(void) {
     fp[1] = 0x7F;
     fp[2] = 0x7F;
 
-    // C&C bytes: Mirror Quisk's requested address to prevent timeout
-    int cc_addr = (frame == 0) ? 0 : last_requested_addr;
-    fp[3] = (cc_addr << 1) | (in_tx ? 1 : 0);
+    // C&C bytes: frame 0 always reports addr 0 (hardware status).
+    // Frame 1 cycles through addresses 1, 2, 3 so all clients see
+    // their register readbacks without a mirroring hack.
+    static uint8_t cc_cycle = 1; // next addr for frame 1; cycles 1→2→3→1
+    int cc_addr = (frame == 0) ? 0 : cc_cycle;
+    fp[3] = (uint8_t)((cc_addr << 1) | (in_tx ? 1 : 0));
 
     if (cc_addr == 0) {
-      // C0=0: hardware status word
-      fp[4] = (in_tx ? 0x01 : 0x00);
-      fp[5] = 0x00;  
-      fp[6] = 0x19;  // firmware version (25) keeps Quisk happy
+      // Addr 0: hardware status word
+      fp[4] = (in_tx ? 0x01 : 0x00); // PTT status
+      fp[5] = 0x00;                    // ADC overflow = none
+      fp[6] = 0x38;                    // firmware version — Hermes-compatible
       fp[7] = 0x00;
+    } else if (cc_addr == 1) {
+      // Addr 1: TX NCO frequency
+      uint32_t f = (uint32_t)freq_hdr;
+      fp[4] = (f >> 24) & 0xFF;
+      fp[5] = (f >> 16) & 0xFF;
+      fp[6] = (f >>  8) & 0xFF;
+      fp[7] =  f        & 0xFF;
+    } else if (cc_addr == 2) {
+      // Addr 2: RX NCO frequency (same as TX for simplex operation)
+      uint32_t f = (uint32_t)freq_hdr;
+      fp[4] = (f >> 24) & 0xFF;
+      fp[5] = (f >> 16) & 0xFF;
+      fp[6] = (f >>  8) & 0xFF;
+      fp[7] =  f        & 0xFF;
     } else {
-      // Mirroring whatever address was requested (including Address 1 for frequency)
-      // This satisfies Quisk's write queue and clears the timeout errors
-      fp[4] = (freq_hdr >> 24) & 0xFF;
-      fp[5] = (freq_hdr >> 16) & 0xFF;
-      fp[6] = (freq_hdr >> 8)  & 0xFF;
-      fp[7] =  freq_hdr        & 0xFF;
+      // Addr 3+: not yet implemented — report zeros
+      fp[4] = fp[5] = fp[6] = fp[7] = 0x00;
     }
+
+    // Advance the cycle after frame 1 is written
+    if (frame == 1)
+      cc_cycle = (cc_cycle >= 3) ? 1 : (cc_cycle + 1);
+    
     // 63 IQ sample pairs per frame, packed as 24-bit big-endian
     for (int s = 0; s < 63; s++) {
       int idx = frame * 63 + s;
@@ -434,7 +452,8 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
 
     last_requested_addr = (buf[11] >> 1) & 0x7F; // Extracting from the C0 byte
 
-    uint32_t active_freq = (r.mox && r.tx_freq) ? r.tx_freq : r.freq;
+    uint32_t active_freq = (r.mox && r.tx_freq) ? r.tx_freq
+                     : (r.freq ? r.freq : r.tx_freq);
     apply_freq_from_ep2(active_freq);
     apply_mox_from_ep2(r.mox);
 
