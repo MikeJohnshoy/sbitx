@@ -16,12 +16,12 @@
 #define PKT_EP2       4
 #define HPSDR_DISCOVERY_REPLY   60
 
-
 typedef struct {
     int      mox;
-    uint32_t freq;     // RX NCO freq (addr 0x02)
-    uint32_t tx_freq;  // TX NCO freq (addr 0x01), 0 if not present
+    uint32_t freq;                      // RX NCO freq (addr 0x02)
+    uint32_t tx_freq;                   // TX NCO freq (addr 0x01), 0 if not present
     int      n_samples;
+    float    iq[SAMPLES_PER_PKT * 2];  // ← add this: interleaved I,Q pairs
 } hpsdr_ep2_result_t;
 
 int  hpsdr_init(void);
