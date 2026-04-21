@@ -4,11 +4,14 @@
 // Major functions are:
 //   Signal processing and buffering:
 //    - manage a data buffer to prevent dropping data between the sbitx and external app
-//    - perform data rate conversion between sbitx intenal 96k samples per second
+//    - perform data rate conversion between sbitx internal 96k samples per second
 //      and the external SDR app 48k samples per second
 //   HPSDR Protocol 1:
 //    - identify packet types
 //    - add or extract I and Q and other controls and data, and copy in and out of buffer
+//   Stater translation
+//    - coordinate state between sBitx and external SDR app (T/R switch, freq, gain settings,
+//      etc.
 //   Initialization control and shutdown
 //    - sbitx.c needs to start and stop and get status on this interface
 
@@ -66,7 +69,7 @@ extern void tx_on(int trigger);
 extern void tx_off(void);
 
 // =============================================================================
-// 1. SIGNAL PROCESSING & BUFFERING
+// SIGNAL PROCESSING & BUFFERING
 // =============================================================================
 
 // IQ accumulation buffer for 126 samples (48kHz)
@@ -200,7 +203,7 @@ void hpsdr_send_iq(double *i_samples, double *q_samples, int n) {
 }
 
 // =============================================================================
-// 2. HPSDR PROTOCOL 1 IMPLEMENTATION
+// HPSDR PROTOCOL 1 IMPLEMENTATION
 // =============================================================================
 
 static volatile int remote_mox = 0;
@@ -465,7 +468,11 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
 }
 
 // =============================================================================
-// 3. INITIALIZATION, CONTROL & SHUTDOWN
+// STATE TRANSLATION
+// =============================================================================
+
+// =============================================================================
+// INITIALIZATION, CONTROL & SHUTDOWN
 // =============================================================================
 
 // T/R idle callback
