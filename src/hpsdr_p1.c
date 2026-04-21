@@ -470,10 +470,10 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
 
 // T/R idle callback
 // 0 = nothing pending, 1 = tx_on pending, 2 = tx_off pending
-static volatile int tr_pending = 0;
 static gboolean hpsdr_tr_idle(gpointer data) {
   (void)data;
   int action = tr_pending;
+  tr_pending = 0;
 
   if (action == 1 && !in_tx) {
     printf("hpsdr_tr_idle: switching to TX\n");
