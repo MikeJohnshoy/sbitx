@@ -39,6 +39,7 @@ static void build_and_send_packet(void);
 static int hpsdr_unpack_ep2(const uint8_t *buf, int len, hpsdr_ep2_result_t *result);
 static void reset_all_tx_state(void);
 static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender);
+static volatile uint8_t last_requested_addr = 0;
 
 // State Translation (Section 3)
 static void apply_freq_from_ep2(uint32_t freq);
@@ -330,25 +331,24 @@ static void build_and_send_packet(void) {
     fp[1] = 0x7F;
     fp[2] = 0x7F;
 
-    // C&C bytes: cycle through C0 addresses 0 and 1 across packets
-    int cc_addr = (seq_for_cc * 2 + frame) % 2;
+    // C&C bytes: Mirror Quisk's requested address to prevent timeout
+    int cc_addr = (frame == 0) ? 0 : last_requested_addr;
     fp[3] = (cc_addr << 1) | (in_tx ? 1 : 0);
 
     if (cc_addr == 0) {
       // C0=0: hardware status word
-      // C1 bit 0 = PTT; bits 4-7 = ADC overflow (none)
       fp[4] = (in_tx ? 0x01 : 0x00);
-      fp[5] = 0x00;  // ADC overflow = none
-      fp[6] = 0x19;  // firmware version (25 = Hermes-compatible)
+      fp[5] = 0x00;  
+      fp[6] = 0x19;  // firmware version (25) keeps Quisk happy
       fp[7] = 0x00;
-    } else if (cc_addr == 1) {
-      // C0=1: report current RX frequency
+    } else {
+      // Mirroring whatever address was requested (including Address 1 for frequency)
+      // This satisfies Quisk's write queue and clears the timeout errors
       fp[4] = (freq_hdr >> 24) & 0xFF;
       fp[5] = (freq_hdr >> 16) & 0xFF;
       fp[6] = (freq_hdr >> 8)  & 0xFF;
       fp[7] =  freq_hdr        & 0xFF;
     }
-
     // 63 IQ sample pairs per frame, packed as 24-bit big-endian
     for (int s = 0; s < 63; s++) {
       int idx = frame * 63 + s;
@@ -431,6 +431,8 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     ep2_last_time_ms = millis_now();
     hpsdr_ep2_result_t r;
     hpsdr_unpack_ep2(buf, len, &r);
+
+    last_requested_addr = (buf[11] >> 1) & 0x7F; // Extracting from the C0 byte
 
     uint32_t active_freq = (r.mox && r.tx_freq) ? r.tx_freq : r.freq;
     apply_freq_from_ep2(active_freq);
