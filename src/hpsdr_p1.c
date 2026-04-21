@@ -281,10 +281,12 @@ static int hpsdr_unpack_ep2(const uint8_t *buf, int len, hpsdr_ep2_result_t *res
     int mox = c0 & 0x01;
     result->mox |= mox; // TX if *either* frame asserts MOX
 
-    // Only update freq from the TX C&C address
-    if (addr == 0x02) {
-      result->freq = ((uint32_t)ptr[4] << 24) | ((uint32_t)ptr[5] << 16) |
-                     ((uint32_t)ptr[6] << 8) | ((uint32_t)ptr[7]);
+    if (addr == 0x01) {
+      result->tx_freq = ((uint32_t)ptr[4] << 24) | ((uint32_t)ptr[5] << 16) |
+                        ((uint32_t)ptr[6] << 8)  | ((uint32_t)ptr[7]);
+    } else if (addr == 0x02) {
+      result->freq    = ((uint32_t)ptr[4] << 24) | ((uint32_t)ptr[5] << 16) |
+                        ((uint32_t)ptr[6] << 8)  | ((uint32_t)ptr[7]);
     }
 
     ptr += 8; // skip sync + C&C header
@@ -430,7 +432,8 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     hpsdr_ep2_result_t r;
     hpsdr_unpack_ep2(buf, len, &r);
 
-    apply_freq_from_ep2(r.freq);
+    uint32_t active_freq = (r.mox && r.tx_freq) ? r.tx_freq : r.freq;
+    apply_freq_from_ep2(active_freq);
     apply_mox_from_ep2(r.mox);
 
     // TX IQ data — push into ring buffer for audio thread (only when MOX active)
