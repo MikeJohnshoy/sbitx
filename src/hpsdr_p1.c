@@ -258,7 +258,8 @@ static void hpsdr_build_discovery_reply(uint8_t *reply, int in_use) {
   reply[9] = 0x5B;
   reply[10] = 0x06; // board type (Hermes)
   reply[11] = 0x25; // protocol version
-  reply[19] = 0x01; // number of receivers = 1
+  reply[15] = 0x01; // number of receivers = 1
+  reply[19] = 0x00; // was wrongly set
 }
 
 // Inbound: EP2 (PKT_EP2 — TX IQ + C&C from SDR app)
