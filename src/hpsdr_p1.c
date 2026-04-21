@@ -22,6 +22,27 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+// function prototypes
+// Signal Processing & Buffering (Section 1)
+static unsigned long millis_now(void);
+static void flush_tx_ring(void);
+static void tx_iq_push_48k(double i_val, double q_val);
+// Public: hpsdr_tx_iq_active, hpsdr_get_tx_iq, hpsdr_send_iq (defined in .h)
+
+// HPSDR Protocol 1 Implementation (Section 2)
+static int hpsdr_classify(const uint8_t *buf, int len);
+static void hpsdr_build_discovery_reply(uint8_t *reply, int in_use);
+static void build_and_send_packet(void);
+static int hpsdr_unpack_ep2(const uint8_t *buf, int len, hpsdr_ep2_result_t *result);
+static void reset_all_tx_state(void);
+static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender);
+
+// Initialization, Control & Shutdown (Section 3)
+static gboolean hpsdr_tr_idle(gpointer data);
+static gboolean hpsdr_watchdog(gpointer data);
+static void *hpsdr_poll_thread(void *arg);
+// Public: hpsdr_init, hpsdr_stop, hpsdr_is_connected, hpsdr_poll (defined in .h)
+
 // --- Configuration & Statics ---
 #define HPSDR_PORT 1024
 #define HPSDR_PKT_SIZE 1032
