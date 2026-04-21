@@ -474,7 +474,6 @@ static volatile int tr_pending = 0;
 static gboolean hpsdr_tr_idle(gpointer data) {
   (void)data;
   int action = tr_pending;
-  tr_pending = 0;
 
   if (action == 1 && !in_tx) {
     printf("hpsdr_tr_idle: switching to TX\n");
