@@ -214,8 +214,8 @@ void hpsdr_send_iq(double *i_samples, double *q_samples, int n) {
 //   Inbound  (SDR app → sBitx): PKT_DISCOVERY, PKT_START, PKT_STOP, PKT_EP2
 //   Outbound (sBitx → SDR app): EP6 RX IQ stream
 //
-// Read order follows the flow: classify → inbound handlers → outbound builder
-//                              → session management → top-level dispatcher
+// functions below follow this order: classify → inbound handlers → outbound builder
+//   → session management → top-level dispatcher
 
 // Protocol statics
 static volatile int remote_mox = 0;
