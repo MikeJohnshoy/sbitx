@@ -2,15 +2,15 @@
 //
 // Provide the interface between the sbitx and an external SDR app using hpsdr Protocol 1
 // Major functions are:
-//   Signal processing:  
+//   Signal processing and buffering:  
 //    - manage a data buffer to prevent dropping data between the sbitx and external app
 //    - perform data rate conversion between sbitx intenal 96k samples per second
 //      and the external SDR app 48k samples per second
 //   HPSDR Protocol 1: 
 //    - identify packet types
 //    - add or extract I and Q and other controls and data, and copy in and out of buffer
-//  Initialization control and shutdown
-//    - sbitx.c need to start and stop and get status on this interface
+//   Initialization control and shutdown
+//    - sbitx.c needs to start and stop and get status on this interface
 
 #include <arpa/inet.h>
 #include <gtk/gtk.h>
@@ -22,9 +22,11 @@
 #include <unistd.h>
 #include "hpsdr_p1.h"
 
+// --- Configuration & Statics ---
 #define HPSDR_PORT 1024
 #define HPSDR_PKT_SIZE 1032
 #define SAMPLES_PER_PACKET 126
+#define TX_SOFT 2
 
 static int hpsdr_sock = -1;
 static struct sockaddr_in stream_dest;
@@ -52,7 +54,6 @@ extern void tx_on(int trigger);
 extern void tx_off(void);
 static volatile int remote_mox = 0;
 static volatile unsigned long ep2_last_time_ms = 0;
-#define TX_SOFT 2
 
 // =============================================================================
 // GTK main-thread callbacks for T/R switching
