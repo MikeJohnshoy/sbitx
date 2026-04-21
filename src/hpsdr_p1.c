@@ -504,23 +504,6 @@ static gboolean hpsdr_tr_idle(gpointer data) {
 // INITIALIZATION, CONTROL & SHUTDOWN
 // =============================================================================
 
-// T/R idle callback
-// 0 = nothing pending, 1 = tx_on pending, 2 = tx_off pending
-static gboolean hpsdr_tr_idle(gpointer data) {
-  (void)data;
-  int action = tr_pending;
-  tr_pending = 0;
-
-  if (action == 1 && !in_tx) {
-    printf("hpsdr_tr_idle: switching to TX\n");
-    tx_on(TX_SOFT);
-  } else if (action == 2) {
-    printf("hpsdr_tr_idle: switching to RX (in_tx=%d)\n", in_tx);
-    tx_off();
-  }
-  return G_SOURCE_REMOVE;
-}
-
 static gboolean hpsdr_watchdog(gpointer data) {
   (void)data;
   if (!running)
