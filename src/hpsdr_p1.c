@@ -55,6 +55,7 @@ static volatile int client_active = 0;
 static volatile int running = 0;
 static uint32_t tx_seq = 0;
 static pthread_t poll_thread;
+static volatile int tr_pending = 0;
 
 // Externs for sBitx core interaction
 extern void remote_execute(char *command);
