@@ -333,17 +333,18 @@ static void build_and_send_packet(void) {
     fp[3] = (cc_addr << 1) | (in_tx ? 1 : 0);
 
     if (cc_addr == 0) {
-      // C0=0: report current RX frequency
+      // C0=0: hardware status word
+      // C1 bit 0 = PTT; bits 4-7 = ADC overflow (none)
+      fp[4] = (in_tx ? 0x01 : 0x00);
+      fp[5] = 0x00;  // ADC overflow = none
+      fp[6] = 0x19;  // firmware version (25 = Hermes-compatible)
+      fp[7] = 0x00;
+    } else if (cc_addr == 1) {
+      // C0=1: report current RX frequency
       fp[4] = (freq_hdr >> 24) & 0xFF;
       fp[5] = (freq_hdr >> 16) & 0xFF;
-      fp[6] = (freq_hdr >> 8) & 0xFF;
-      fp[7] = freq_hdr & 0xFF;
-    } else if (cc_addr == 1) {
-      // C0=1: sample rate + ADC overflow flags (48 kHz, no overflow)
-      fp[4] = 0x00;
-      fp[5] = 0x00;
-      fp[6] = 0x00;
-      fp[7] = 0x00;
+      fp[6] = (freq_hdr >> 8)  & 0xFF;
+      fp[7] =  freq_hdr        & 0xFF;
     }
 
     // 63 IQ sample pairs per frame, packed as 24-bit big-endian
