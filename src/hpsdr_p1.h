@@ -19,8 +19,8 @@
 
 typedef struct {
     int      mox;
-    uint32_t freq;
-    float    iq[252];
+    uint32_t freq;     // RX NCO freq (addr 0x02)
+    uint32_t tx_freq;  // TX NCO freq (addr 0x01), 0 if not present
     int      n_samples;
 } hpsdr_ep2_result_t;
 
