@@ -436,8 +436,10 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     apply_freq_from_ep2(active_freq);
     apply_mox_from_ep2(r.mox);
 
-    // TX IQ data — push into ring buffer for audio thread (only when MOX active)
-    if (r.mox && r.n_samples > 0) {
+    // TX IQ data — push into ring buffer for audio thread whenever samples arrive.
+    // Don't gate on MOX: apps send IQ before MOX is asserted, pre-filling the
+    // buffer so the leading edge of TX is not clipped.
+    if (r.n_samples > 0) {
       for (int k = 0; k < r.n_samples; k++)
         tx_iq_push_48k((double)r.iq[k * 2], (double)r.iq[k * 2 + 1]);
     }
