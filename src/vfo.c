@@ -4,7 +4,7 @@
 // Extended by Mike Johnshoy (KB2ML) to provide quadrature (I/Q) output for complex
 // mixing
 //
-// vfo_read_iq() returns both the sine (Q) and cosine (I) of the current phase.
+// vfo_read_iq() returns both the cosine (I) and sine (Q) of the current phase.
 // Both values are returned in essentially the same timae as real-only output.
 
 #include "sdr.h"
