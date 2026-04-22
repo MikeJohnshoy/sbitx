@@ -1,15 +1,11 @@
 // vfo.c — Numerically Controlled Oscillator (NCO) for sBitx
 //
 // Originally written by Farhan (VU2ESE) as a real-only sine oscillator.
-// Extended by Mike Johnshoy to provide quadrature (I/Q) output for complex
+// Extended by Mike Johnshoy (KB2ML) to provide quadrature (I/Q) output for complex
 // mixing
 //
 // vfo_read_iq() returns both the sine (Q) and cosine (I) of the current phase.
-// Cosine is derived from the identity:  cos(θ) = sin(θ + 90°)
-// In 16-bit phase counts, 90° = 16384 counts.
-// Both values are computed in a single quadrant dispatch — no second lookup
-// is needed — so the cost of quadrature output is essentially the same as
-// real-only output.
+// Both values are returned in essentially the same timae as real-only output.
 
 #include "sdr.h"
 #include <complex.h>
@@ -22,7 +18,7 @@
 #include <time.h>
 #include <unistd.h>
 
-// First-quadrant sine lookup table (0° to 90°, inclusive of both endpoints).
+// single quadrant sine lookup table (0° to 90°, inclusive of both endpoints).
 // This table is filled once at startup and never written again.
 static int phase_table[MAX_PHASE_COUNT];
 
@@ -35,6 +31,7 @@ int sampling_freq = 96000;
 void vfo_init_phase_table() {
   for (int i = 0; i < MAX_PHASE_COUNT; i++) {
     double d = (M_PI / 2) * ((double)i) / ((double)MAX_PHASE_COUNT);
+    // scale to leave a little head room for max values
     phase_table[i] = (int)(sin(d) * 1073741824.0);
   }
 }
@@ -46,14 +43,13 @@ void vfo_start(struct vfo *v, int frequency_hz, int start_phase) {
   v->freq_hz = frequency_hz;
 }
 
+// For callers that only need a real (single-channel) output.
 // Returns the sine of the current phase as a fixed-point integer scaled
 // by 2^30, then advances the phase accumulator by one sample.
-// For callers that only need a real (single-channel) output. Callers that
-// need both I and Q should use vfo_read_iq() instead.
+// Callers that need both I and Q should use vfo_read_iq() instead.
 int vfo_read(struct vfo *v) {
   int phase = v->phase & 0xffff;
   int val;
-
   if (phase < 16384)
     val = phase_table[phase];
   else if (phase < 32768)
@@ -68,15 +64,11 @@ int vfo_read(struct vfo *v) {
   return val;
 }
 
-// Returns both the sine (Q) and cosine (I) of the current phase as
+// Returns both the cosine (I) and sine (Q) of the current phase as
 // fixed-point integers scaled by 2^30, then advances the phase accumulator.
-// Both channels are resolved in a single quadrant dispatch. Because I and Q
-// are always exactly one quadrant apart, one branch determines the correct
-// table index for both channels simultaneously
 void vfo_read_iq(struct vfo *v, int *out_i, int *out_q) {
   int phase = v->phase & 0xffff;
   int idx;
-
   if (phase < 16384) {
     idx = phase;
     *out_q =  phase_table[idx];
