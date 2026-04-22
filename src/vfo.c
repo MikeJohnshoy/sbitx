@@ -1,6 +1,6 @@
 // vfo.c — Numerically Controlled Oscillator (NCO) for sBitx
 //
-// Originally written by Farhan (VU2ESE) as a real-only sine oscillator.
+// Originally written by Farhan (VU2ESE) as a real-only oscillator.
 // Extended by Mike Johnshoy (KB2ML) to provide quadrature (I/Q) output for complex
 // mixing
 //
