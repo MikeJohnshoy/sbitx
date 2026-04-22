@@ -80,7 +80,7 @@ extern void tx_off(void);
 static double iq_buf_i[SAMPLES_PER_PACKET];
 static double iq_buf_q[SAMPLES_PER_PACKET];
 static int iq_buf_count = 0;
-static double hpsdr_iq_gain = 30.0; // add gain to I and Q data going out
+static double hpsdr_iq_gain = 15.0; // add gain to I and Q data going out
 static double hpsdr_tx_gain = 30.0; // add gain to I and Q coming from external SDR
 
 // Filter state for the 24kHz LPF (stores the last sample of the previous block)
@@ -200,9 +200,9 @@ void hpsdr_send_iq(double *i_samples, double *q_samples, int n) {
     }
   }
   // Save final samples for the next block's filter calculation
-  if (n > 0) {
-    last_i = i_samples[n - 1];
-    last_q = q_samples[n - 1];
+  if (n >= 2) {
+    last_i = i_samples[n - 2];   // last decimated (even-indexed) sample
+    last_q = q_samples[n - 2];
   }
 }
 
@@ -257,7 +257,8 @@ static void hpsdr_build_discovery_reply(uint8_t *reply, int in_use) {
   reply[9] = 0x5B;
   reply[10] = 0x06; // board type (Hermes)
   reply[11] = 0x25; // protocol version
-  reply[19] = 0x01; // number of receivers = 1
+  reply[19] = 0x01; // MetisVersion
+  reply[20] = 0x01; // NumRxs = 1
 }
 
 // Inbound: EP2 (PKT_EP2 — TX IQ + C&C from SDR app)
@@ -332,7 +333,7 @@ static void build_and_send_packet(void) {
 
     // C&C bytes: cycle through C0 addresses 0 and 1 across packets
     int cc_addr = (seq_for_cc * 2 + frame) % 2;
-    fp[3] = (cc_addr << 1) | (in_tx ? 1 : 0);
+    fp[3] = (cc_addr << 3) | (in_tx ? 1 : 0);
 
     if (cc_addr == 0) {
       // C0=0: hardware status word
