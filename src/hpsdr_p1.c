@@ -112,39 +112,68 @@ static unsigned long millis_now(void) {
 }
 
 static void flush_tx_ring(void) {
-  tx_iq_wr = 0;
-  tx_iq_rd = 0;
-  tx_up_prev_i = 0.0;
-  tx_up_prev_q = 0.0;
+    tx_iq_wr = 0;
+    tx_iq_rd = 0;
+    tx_up_prev_i = 0.0;
+    tx_up_prev_q = 0.0;
+    
+    // Zero out the FIR history buffers
+    memset(tx_hist_i, 0, sizeof(tx_hist_i));
+    memset(tx_hist_q, 0, sizeof(tx_hist_q));
 }
 
-// Write one 48 kHz sample pair into the ring as two 96 kHz samples
-// using linear interpolation (simple half-band upsample).
+// Delay lines for I and Q (6 taps)
+static double tx_hist_i[6] = {0};
+static double tx_hist_q[6] = {0};
+
+// use 6-tap FIR filter to choose new mid-point
 static void tx_upsample_and_push(double i_val, double q_val) {
-    // Linear interpolation: mid = (prev + current) / 2
-    double mid_i = 0.5 * (tx_up_prev_i + i_val);
-    double mid_q = 0.5 * (tx_up_prev_q + q_val);
+  // shift delay line
+  for (int i = 5; i > 0; i--) {
+    tx_hist_i[i] = tx_hist_i[i - 1];
+    tx_hist_q[i] = tx_hist_q[i - 1];
+  }
+  tx_hist_i[0] = i_val;
+  tx_hist_q[0] = q_val;
 
-    int wr = tx_iq_wr;
-    int rd = tx_iq_rd;
+  // Define 6-tap Polyphase Coefficients (Half-band filter)
+  // These coefficients are designed for the midpoint sample.
+  // They provide a much sharper cutoff at 24kHz than linear averaging.
+  static const double taps[6] = {0.0121, -0.0551, 0.2930,
+                                 0.2930, -0.0551, 0.0121};
+  // calculate the interpolated midpoint (Phase 1)
+  double mid_i = 0;
+  double mid_q = 0;
+  for (int i = 0; i < 6; i++) {
+    mid_i += tx_hist_i[i] * taps[i];
+    mid_q += tx_hist_q[i] * taps[i];
+  }
 
-    // Overflow guard — drop if ring nearly full
-    if ((wr - rd) >= (TX_IQ_RING_SIZE - 4)) return;
+  // calculate the original sample (Phase 0)
+  // In a polyphase upconverter, we often use the center of the delay line
+  // to keep the phase aligned with the calculated midpoint.
+  double out_i = tx_hist_i[2];
+  double out_q = tx_hist_q[2];
 
-    // Sample 1: The interpolated midpoint
-    tx_iq_ring_i[wr & TX_IQ_RING_MASK] = mid_i;
-    tx_iq_ring_q[wr & TX_IQ_RING_MASK] = mid_q;
-    wr++;
+  // Ring buffer logic
+  int wr = tx_iq_wr;
+  int rd = tx_iq_rd;
 
-    // Sample 2: The original sample
-    tx_iq_ring_i[wr & TX_IQ_RING_MASK] = i_val;
-    tx_iq_ring_q[wr & TX_IQ_RING_MASK] = q_val;
-    wr++;
+  if ((wr - rd) >= (TX_IQ_RING_SIZE - 4))
+    return;
 
-    tx_iq_wr = wr;
-    tx_up_prev_i = i_val;
-    tx_up_prev_q = q_val;
-    tx_iq_last_time_ms = millis_now();
+  // Sample 1 -The FIR-filtered midpoint
+  tx_iq_ring_i[wr & TX_IQ_RING_MASK] = mid_i;
+  tx_iq_ring_q[wr & TX_IQ_RING_MASK] = mid_q;
+  wr++;
+
+  // Sample 2 -The aligned original sample
+  tx_iq_ring_i[wr & TX_IQ_RING_MASK] = out_i;
+  tx_iq_ring_q[wr & TX_IQ_RING_MASK] = out_q;
+  wr++;
+
+  tx_iq_wr = wr;
+  tx_iq_last_time_ms = millis_now();
 }
 
 int hpsdr_tx_iq_active(void) {
