@@ -111,6 +111,10 @@ static unsigned long millis_now(void) {
   return (unsigned long)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
 }
 
+// Delay lines for I and Q (6 taps)
+static double tx_hist_i[6] = {0};
+static double tx_hist_q[6] = {0};
+
 static void flush_tx_ring(void) {
     tx_iq_wr = 0;
     tx_iq_rd = 0;
@@ -121,10 +125,6 @@ static void flush_tx_ring(void) {
     memset(tx_hist_i, 0, sizeof(tx_hist_i));
     memset(tx_hist_q, 0, sizeof(tx_hist_q));
 }
-
-// Delay lines for I and Q (6 taps)
-static double tx_hist_i[6] = {0};
-static double tx_hist_q[6] = {0};
 
 // use 6-tap FIR filter to choose new mid-point
 static void tx_upsample_and_push(double i_val, double q_val) {
