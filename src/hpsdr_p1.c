@@ -120,27 +120,31 @@ static void flush_tx_ring(void) {
 
 // Write one 48 kHz sample pair into the ring as two 96 kHz samples
 // using linear interpolation (simple half-band upsample).
-static void tx_iq_push_48k(double i_val, double q_val) {
-  double mid_i = 0.5 * (tx_up_prev_i + i_val);
-  double mid_q = 0.5 * (tx_up_prev_q + q_val);
-  int wr = tx_iq_wr;
-  int rd = tx_iq_rd;
+static void tx_upsample_and_push(double i_val, double q_val) {
+    // Linear interpolation: mid = (prev + current) / 2
+    double mid_i = 0.5 * (tx_up_prev_i + i_val);
+    double mid_q = 0.5 * (tx_up_prev_q + q_val);
 
-  // Overflow guard — drop if ring nearly full
-  if ((wr - rd) >= (TX_IQ_RING_SIZE - 4))
-    return;
+    int wr = tx_iq_wr;
+    int rd = tx_iq_rd;
 
-  tx_iq_ring_i[wr & TX_IQ_RING_MASK] = mid_i;
-  tx_iq_ring_q[wr & TX_IQ_RING_MASK] = mid_q;
-  wr++;
-  tx_iq_ring_i[wr & TX_IQ_RING_MASK] = i_val;
-  tx_iq_ring_q[wr & TX_IQ_RING_MASK] = q_val;
-  wr++;
-  tx_iq_wr = wr;
+    // Overflow guard — drop if ring nearly full
+    if ((wr - rd) >= (TX_IQ_RING_SIZE - 4)) return;
 
-  tx_up_prev_i = i_val;
-  tx_up_prev_q = q_val;
-  tx_iq_last_time_ms = millis_now();
+    // Sample 1: The interpolated midpoint
+    tx_iq_ring_i[wr & TX_IQ_RING_MASK] = mid_i;
+    tx_iq_ring_q[wr & TX_IQ_RING_MASK] = mid_q;
+    wr++;
+
+    // Sample 2: The original sample
+    tx_iq_ring_i[wr & TX_IQ_RING_MASK] = i_val;
+    tx_iq_ring_q[wr & TX_IQ_RING_MASK] = q_val;
+    wr++;
+
+    tx_iq_wr = wr;
+    tx_up_prev_i = i_val;
+    tx_up_prev_q = q_val;
+    tx_iq_last_time_ms = millis_now();
 }
 
 int hpsdr_tx_iq_active(void) {
@@ -169,43 +173,34 @@ int hpsdr_get_tx_iq(double *out_i, double *out_q, int max_samples) {
   return n;
 }
 
-// Called continuously with 96kHz samples from the RX processing chain.
-// Applies a 24kHz half-band LPF to prevent aliasing, then decimates 2:1.
-void hpsdr_send_iq(double *i_samples, double *q_samples, int n) {
-  if (!client_active || hpsdr_sock < 0)
-    return;
-
-  for (int k = 0; k < n; k += 2) {
-    double filt_i, filt_q;
-
-    // Simple 3-tap FIR half-band filter: 0.25*z^-1 + 0.5*z^0 + 0.25*z^1
-    // Cuts off accurately at Fs/4 (24kHz)
-    if (k == 0) {
-      filt_i = 0.25 * last_i + 0.5 * i_samples[0] + 0.25 * i_samples[1];
-      filt_q = 0.25 * last_q + 0.5 * q_samples[0] + 0.25 * q_samples[1];
-    } else if (k + 1 < n) {
-      filt_i = 0.25 * i_samples[k - 1] + 0.5 * i_samples[k] + 0.25 * i_samples[k + 1];
-      filt_q = 0.25 * q_samples[k - 1] + 0.5 * q_samples[k] + 0.25 * q_samples[k + 1];
-    } else {
-      // Edge case handling if 'n' isn't even, though it usually is 1024
-      filt_i = i_samples[k];
-      filt_q = q_samples[k];
-    }
+// apply 24kHz LPF and decimate 2:1
+static void rx_filter_and_decimate(double i0, double i1, double q0, double q1) {
+    // 3-tap FIR logic using your 'last_i/q' state variables
+    double filt_i = 0.25 * last_i + 0.5 * i0 + 0.25 * i1;
+    double filt_q = 0.25 * last_q + 0.5 * q0 + 0.25 * q1;
 
     iq_buf_i[iq_buf_count] = filt_i * hpsdr_iq_gain;
     iq_buf_q[iq_buf_count] = filt_q * hpsdr_iq_gain;
     iq_buf_count++;
 
+    // Save the end of this pair for the next filter window
+    last_i = i1;
+    last_q = q1;
+
     if (iq_buf_count >= SAMPLES_PER_PACKET) {
-      build_and_send_packet();
-      iq_buf_count = 0;
+        build_and_send_packet();
+        iq_buf_count = 0;
     }
-  }
-  // Save final samples for the next block's filter calculation
-  if (n >= 2) {
-    last_i = i_samples[n - 2];   // last decimated (even-indexed) sample
-    last_q = q_samples[n - 2];
-  }
+}
+
+void hpsdr_send_iq(double *i_samples, double *q_samples, int n) {
+    if (!client_active || hpsdr_sock < 0) return;
+
+    // Iterate in steps of 2 to convert 96kHz pairs into 48kHz singles
+    for (int k = 0; k < n - 1; k += 2) {
+        rx_filter_and_decimate(i_samples[k], i_samples[k+1], 
+                               q_samples[k], q_samples[k+1]);
+    }
 }
 
 // =============================================================================
@@ -508,22 +503,19 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     break;
 
   case PKT_EP2: {
-    if (!client_active)
-      break;
+    if (!client_active) break;
     ep2_last_time_ms = millis_now();
+    
     hpsdr_ep2_result_t r;
     hpsdr_unpack_ep2(buf, len, &r);
 
-    uint32_t active_freq = (r.mox && r.tx_freq) ? r.tx_freq : r.freq;
-    apply_freq_from_ep2(active_freq);
+    apply_freq_from_ep2((r.mox && r.tx_freq) ? r.tx_freq : r.freq);
     apply_mox_from_ep2(r.mox);
 
-    // TX IQ data — push into ring buffer for audio thread whenever samples arrive.
-    // Don't gate on MOX: apps send IQ before MOX is asserted, pre-filling the
-    // buffer so the leading edge of TX is not clipped.
     if (r.n_samples > 0) {
-      for (int k = 0; k < r.n_samples; k++)
-        tx_iq_push_48k((double)r.iq[k * 2], (double)r.iq[k * 2 + 1]);
+      for (int k = 0; k < r.n_samples; k++) {
+        tx_upsample_and_push(r.iq[k * 2], r.iq[k * 2 + 1]);
+      }
     }
     break;
   }
