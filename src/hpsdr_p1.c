@@ -267,44 +267,109 @@ static void hpsdr_build_discovery_reply(uint8_t *reply, int in_use) {
 // Unpack one EP2 packet: extract MOX bit, TX frequency, and TX IQ samples.
 // Returns the number of IQ sample pairs unpacked.
 static int hpsdr_unpack_ep2(const uint8_t *buf, int len, hpsdr_ep2_result_t *result) {
-  if (!buf || len < HPSDR_PKT_SIZE)
-    return 0;
+  if (!buf || len < HPSDR_PKT_SIZE) return 0;
+
   result->mox = 0;
   result->freq = 0;
+  result->tx_freq = 0;
   result->n_samples = 0;
 
-  const uint8_t *ptr = buf + 8; // skip Metis header
+  const uint8_t *ptr = buf + 8; // skip 8-byte Metis header
+
   for (int frame = 0; frame < 2; frame++) {
+    // Check for standard USB sync bytes 7F 7F 7F
     if (ptr[0] != 0x7F || ptr[1] != 0x7F || ptr[2] != 0x7F) {
       ptr += 512;
       continue;
     }
-    uint8_t c0 = ptr[3];
-    uint8_t addr = (c0 >> 1) & 0x7F;
-    int mox = c0 & 0x01;
-    result->mox |= mox; // TX if *either* frame asserts MOX
 
-    if (addr == 0x01) {
-      result->tx_freq = ((uint32_t)ptr[4] << 24) | ((uint32_t)ptr[5] << 16) |
-                        ((uint32_t)ptr[6] << 8)  | ((uint32_t)ptr[7]);
-    } else if (addr == 0x02) {
-      result->freq    = ((uint32_t)ptr[4] << 24) | ((uint32_t)ptr[5] << 16) |
-                        ((uint32_t)ptr[6] << 8)  | ((uint32_t)ptr[7]);
+    uint8_t c0 = ptr[3];
+    uint8_t addr = (c0 >> 1) & 0x7F; // Command Slot Index
+    int mox = c0 & 0x01;             // MOX/PTT bit (Section 8.3)
+    
+    // The MOX state must be OR'd across both frames (Section 5.5)
+    result->mox |= mox;
+
+    // 19-Step Round-Robin Command Decoding (Section 5.4)
+    switch (addr) {
+      case 0x00: // Case 0: General Settings (Sample Rate, nddc, etc.)
+        // Stub: Add logic for Sample Rate (C1 bits 1:0) if needed
+        break;
+
+      case 0x01: // Case 1: TX VFO Frequency
+        result->tx_freq = ((uint32_t)ptr[4] << 24) | ((uint32_t)ptr[5] << 16) | 
+                          ((uint32_t)ptr[6] << 8)  | ((uint32_t)ptr[7]);
+        break;
+
+      case 0x02: // Case 2: RX1 (DDC0) Frequency
+        result->freq = ((uint32_t)ptr[4] << 24) | ((uint32_t)ptr[5] << 16) | 
+                       ((uint32_t)ptr[6] << 8)  | ((uint32_t)ptr[7]);
+        break;
+
+      case 0x03: // Case 3: RX2 (DDC1) Frequency
+        break;
+
+      case 0x0E: // Case 4: ADC Assignments & TX Step Attenuator (C3)
+        break;
+
+      case 0x04: // Case 5: DDC2 Frequency
+      case 0x05: // Case 6: DDC3 Frequency
+      case 0x06: // Case 7: DDC4 Frequency
+      case 0x07: // Case 8: DDC5 Frequency
+      case 0x08: // Case 9: DDC6 Frequency
+        break;
+
+      case 0x09: // Case 10: Drive Level (C1) & Alex Filters (C3/C4)
+        // Stub: This is where sBitx physical filter relays should be updated
+        break;
+
+      case 0x0A: // Case 11: Preamp & RX Step Attenuator (C4)
+        break;
+
+      case 0x0B: // Case 12: CW Keyer Speed & Weight
+        break;
+
+      case 0x0F: // Case 13: CW Enable & Sidetone Level
+        break;
+
+      case 0x10: // Case 14: CW Hang Delay & Sidetone Freq
+        break;
+
+      case 0x11: // Case 15: EER PWM Settings
+        break;
+
+      case 0x12: // Case 16: BPF2 / Transverter
+        break;
+
+      // HL2-Specific Extensions (Section 5.3)
+      case 0x17: // Case 17: (C0 masked 0x2E) HL2 extension
+      case 0x3A: // Case 18: (C0 masked 0x74) HL2 extension
+        break;
+
+      default:
+        break;
     }
 
-    ptr += 8; // skip sync + C&C header
+    // Move past the sync + 5 C&C bytes to the IQ payload
+    ptr += 8; 
+
+    // Unpack 16-bit Big-Endian IQ Samples (Section 8.4)
+    // For nddc=1, there are 63 samples per USB frame.
     for (int j = 0; j < 63 && result->n_samples < SAMPLES_PER_PKT; j++) {
+      // Offset 0-3 is L/R Audio (ignored), Offset 4-7 is TX IQ
       int16_t is = (int16_t)(((uint16_t)ptr[4] << 8) | (uint16_t)ptr[5]);
       int16_t qs = (int16_t)(((uint16_t)ptr[6] << 8) | (uint16_t)ptr[7]);
+
       result->iq[result->n_samples * 2 + 0] = (float)is / 32768.0f * hpsdr_tx_gain;
       result->iq[result->n_samples * 2 + 1] = (float)qs / 32768.0f * hpsdr_tx_gain;
-      ptr += 8;
+
+      ptr += 8; // Move to next 8-byte sample group
       result->n_samples++;
     }
   }
+
   return result->n_samples;
 }
-
 // Outbound: EP6 (RX IQ stream to SDR app)
 // Build and send one EP6 packet containing two frames of 63 IQ sample pairs,
 // plus C&C bytes reporting current sBitx state (T/R status, frequency).
