@@ -15,7 +15,9 @@
 //   Initialization control and shutdown
 //    - sbitx.c needs to start and stop and get status on this interface
 //
-// Developed using NereusSDR/ docs/protocols/openhpsdr-protocol1-capture-reference.md
+// thanks, to Dave N1AI and Juan WP3DN
+// Developed using NereusSDR/docs/protocols/openhpsdr-protocol1-capture-reference.md
+// Mike KB2ML
 
 #include "hpsdr_p1.h"
 #include <arpa/inet.h>
@@ -52,7 +54,7 @@ static gboolean hpsdr_watchdog(gpointer data);
 static void *hpsdr_poll_thread(void *arg);
 // Public: hpsdr_init, hpsdr_stop, hpsdr_is_connected, hpsdr_poll (defined in .h)
 
-// --- Configuration & Statics ---
+// Configuration & Statics
 #define HPSDR_PORT 1024
 #define HPSDR_PKT_SIZE 1032
 #define SAMPLES_PER_PACKET 126
@@ -202,24 +204,57 @@ int hpsdr_get_tx_iq(double *out_i, double *out_q, int max_samples) {
   return n;
 }
 
+// 31-tap half-band FIR coefficients (Fs=96k, Cutoff=24k)
+// note: Every other tap is 0 except for the center tap (index 15)
+static double hb_coeffs[31] = {
+    -0.00055,  0.0,  0.00165,  0.0, -0.00411,  0.0,  0.00877,  0.0, 
+    -0.01736,  0.0,  0.03433,  0.0, -0.07612,  0.0,  0.30338,  0.5, 
+     0.30338,  0.0, -0.07612,  0.0,  0.03433,  0.0, -0.01736,  0.0, 
+     0.00877,  0.0, -0.00411,  0.0,  0.00165,  0.0, -0.00055
+};
+
+static double rx_hist_i[31];
+static double rx_hist_q[31];
+static int rx_hist_ptr = 0;
+
 // apply 24kHz LPF and decimate 2:1
 static void rx_filter_and_decimate(double i0, double i1, double q0, double q1) {
-    // 3-tap FIR logic using your 'last_i/q' state variables
-    double filt_i = 0.25 * last_i + 0.5 * i0 + 0.25 * i1;
-    double filt_q = 0.25 * last_q + 0.5 * q0 + 0.25 * q1;
+  // We treat the incoming pair (i0, i1) as two sequential 96kHz samples
+  // Push i0/q0 into history
+  rx_hist_i[rx_hist_ptr] = i0;
+  rx_hist_q[rx_hist_ptr] = q0;
+  rx_hist_ptr = (rx_hist_ptr + 1) % 31;
 
-    iq_buf_i[iq_buf_count] = filt_i * hpsdr_iq_gain;
-    iq_buf_q[iq_buf_count] = filt_q * hpsdr_iq_gain;
-    iq_buf_count++;
+  // Push i1/q1 into history
+  rx_hist_i[rx_hist_ptr] = i1;
+  rx_hist_q[rx_hist_ptr] = q1;
+  rx_hist_ptr = (rx_hist_ptr + 1) % 31;
 
-    // Save the end of this pair for the next filter window
-    last_i = i1;
-    last_q = q1;
+  // Perform the FIR convolution only ONCE (Decimation 2:1)
+  double filt_i = 0;
+  double filt_q = 0;
+  int p = rx_hist_ptr;
 
-    if (iq_buf_count >= SAMPLES_PER_PACKET) {
-        build_and_send_packet();
-        iq_buf_count = 0;
-    }
+  for (int j = 0; j < 31; j++) {
+    // We iterate backwards from the current pointer
+    int idx = (p - 1 - j);
+    if (idx < 0)
+      idx += 31;
+
+    // Optimization: You could skip the 0.0 coefficients here if desired
+    filt_i += rx_hist_i[idx] * hb_coeffs[j];
+    filt_q += rx_hist_q[idx] * hb_coeffs[j];
+  }
+
+  // Store in the HPSDR buffer
+  iq_buf_i[iq_buf_count] = filt_i * hpsdr_iq_gain;
+  iq_buf_q[iq_buf_count] = filt_q * hpsdr_iq_gain;
+  iq_buf_count++;
+
+  if (iq_buf_count >= SAMPLES_PER_PACKET) {
+    build_and_send_packet();
+    iq_buf_count = 0;
+  }
 }
 
 void hpsdr_send_iq(double *i_samples, double *q_samples, int n) {
