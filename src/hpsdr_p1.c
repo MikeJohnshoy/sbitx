@@ -14,6 +14,8 @@
 //      etc.
 //   Initialization control and shutdown
 //    - sbitx.c needs to start and stop and get status on this interface
+//
+// Developed using NereusSDR/ docs/protocols/openhpsdr-protocol1-capture-reference.md
 
 #include "hpsdr_p1.h"
 #include <arpa/inet.h>
@@ -310,7 +312,7 @@ static void build_and_send_packet(void) {
   uint8_t pkt[HPSDR_PKT_SIZE];
   memset(pkt, 0, sizeof(pkt));
 
-  // EP6 header
+  // Metis Header for EP6 (Radio -> Host)
   pkt[0] = 0xEF; pkt[1] = 0xFE; pkt[2] = 0x01; pkt[3] = 0x06;
   pkt[4] = (tx_seq >> 24) & 0xFF;
   pkt[5] = (tx_seq >> 16) & 0xFF;
@@ -321,28 +323,49 @@ static void build_and_send_packet(void) {
 
   for (int frame = 0; frame < 2; frame++) {
     uint8_t *fp = pkt + 8 + frame * 512;
-    fp[0] = 0x7F; fp[1] = 0x7F; fp[2] = 0x7F; // Sync bytes
+    fp[0] = 0x7F; fp[1] = 0x7F; fp[2] = 0x7F; // USB Sync
 
-    // The MOX bit is already correctly placed in the low bit of C0 (fp[3])
-    int cc_addr = (seq_for_cc * 2 + frame) % 2;
+    // Round-Robin: 5 slots (0-4) as per Capture Reference Section 4.3
+    int cc_addr = (seq_for_cc * 2 + frame) % 5;
+    
+    // C0 byte: Bits 7:3 = Slot Index, Bit 0 = PTT/MOX
     fp[3] = (cc_addr << 3) | (in_tx ? 1 : 0);
 
-    if (cc_addr == 0) {
-      // Slot 0: C1 bit 0 is ADC Overload. Setting to 0 fixes the false "CLIP" warning.
-      fp[4] = 0x00; 
-      fp[5] = 0x00; 
-      fp[6] = 0x4A; // Unified firmware version (74 dec)
-      fp[7] = 0x00;
-    } 
-    else if (cc_addr == 1) {
-      // Slot 1: Section 4.3 says C1-C4 are for PA/Exciter Power.
-      // Frequency was being misinterpreted as a massive power spike.
-      // Leaving these as 0.0 for now will show a 0W reading in the host app.
-      fp[4] = 0x00; 
-      fp[5] = 0x00; 
-      fp[6] = 0x00; 
-      fp[7] = 0x00;
+    // Map C1-C4 bytes based on the Slot Index
+    switch (cc_addr) {
+      case 0: // Slot 0: ADC Overload & Version
+        fp[4] = 0x00; // C1: Bit 0 is ADC Overload (leave 0 to avoid false Clip)
+        fp[5] = 0x00; // C2: Digital Inputs
+        fp[6] = 0x4A; // C3: Firmware Version (74 dec)
+        fp[7] = 0x00; // C4: Reserved
+        break;
+
+      case 1: // Slot 1: Exciter & Forward Power
+        // C1-C2: Exciter Power, C3-C4: Forward PA Power
+        fp[4] = 0x00; fp[5] = 0x00; 
+        fp[6] = 0x00; fp[7] = 0x00; 
+        break;
+
+      case 2: // Slot 2: Reverse Power & PA Voltage
+        // C1-C2: Reverse PA Power, C3-C4: PA Volts (User_ADC0)
+        fp[4] = 0x00; fp[5] = 0x00;
+        fp[6] = 0x00; fp[7] = 0x00;
+        break;
+
+      case 3: // Slot 3: PA Current & Supply Voltage
+        // C1-C2: PA Amps (User_ADC1), C3-C4: Supply Volts
+        fp[4] = 0x00; fp[5] = 0x00;
+        fp[6] = 0x00; fp[7] = 0x00;
+        break;
+
+      case 4: // Slot 4: Additional ADC Overload Flags
+        // C1: ADC0, C2: ADC1, C3: ADC2 (per Section 4.3)
+        fp[4] = 0x00; fp[5] = 0x00;
+        fp[6] = 0x00; fp[7] = 0x00;
+        break;
     }
+
+    // send I and Q data frames, along with MIC data
     // 63 IQ sample pairs per frame, packed as 24-bit big-endian
     for (int s = 0; s < 63; s++) {
       int idx = frame * 63 + s;
