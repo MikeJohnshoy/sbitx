@@ -249,14 +249,14 @@ static void hpsdr_build_discovery_reply(uint8_t *reply, int in_use) {
   reply[1] = 0xFE;
   reply[2] = 0x02;
   reply[3] = in_use ? 0x02 : 0x00;
-  reply[4] = 0x00; // MAC
-  reply[5] = 0x1C;
-  reply[6] = 0xC0;
-  reply[7] = 0xA2;
-  reply[8] = 0x22;
-  reply[9] = 0x5B;
-  reply[10] = 0x06; // board type (Hermes)
-  reply[11] = 0x25; // protocol version
+  
+  // MAC Address
+  reply[4] = 0x00; 
+  reply[5] = 0x1C; reply[6] = 0xC0; reply[7] = 0xA2;
+  reply[8] = 0x22; reply[9] = 0x5B;
+
+  reply[10] = 0x06; // Board type: Hermes-Lite
+  reply[11] = 0x4A; // Updated firmware version (74 dec) to match reference
   reply[19] = 0x01; // MetisVersion
   reply[20] = 0x01; // NumRxs = 1
 }
@@ -311,45 +311,38 @@ static void build_and_send_packet(void) {
   memset(pkt, 0, sizeof(pkt));
 
   // EP6 header
-  pkt[0] = 0xEF;
-  pkt[1] = 0xFE;
-  pkt[2] = 0x01;
-  pkt[3] = 0x06;
+  pkt[0] = 0xEF; pkt[1] = 0xFE; pkt[2] = 0x01; pkt[3] = 0x06;
   pkt[4] = (tx_seq >> 24) & 0xFF;
   pkt[5] = (tx_seq >> 16) & 0xFF;
-  pkt[6] = (tx_seq >> 8) & 0xFF;
+  pkt[6] = (tx_seq >> 8)  & 0xFF;
   pkt[7] = tx_seq & 0xFF;
 
   uint32_t seq_for_cc = tx_seq++;
 
-  // Two 512-byte frames
   for (int frame = 0; frame < 2; frame++) {
     uint8_t *fp = pkt + 8 + frame * 512;
+    fp[0] = 0x7F; fp[1] = 0x7F; fp[2] = 0x7F; // Sync bytes
 
-    // Sync bytes
-    fp[0] = 0x7F;
-    fp[1] = 0x7F;
-    fp[2] = 0x7F;
-
-    // C&C bytes: cycle through C0 addresses 0 and 1 across packets
+    // The MOX bit is already correctly placed in the low bit of C0 (fp[3])
     int cc_addr = (seq_for_cc * 2 + frame) % 2;
     fp[3] = (cc_addr << 3) | (in_tx ? 1 : 0);
 
     if (cc_addr == 0) {
-      // C0=0: hardware status word
-      // C1 bit 0 = PTT; bits 4-7 = ADC overflow (none)
-      fp[4] = (in_tx ? 0x01 : 0x00);
-      fp[5] = 0x00;  // ADC overflow = none
-      fp[6] = 0x19;  // firmware version (25 = Hermes-compatible)
+      // Slot 0: C1 bit 0 is ADC Overload. Setting to 0 fixes the false "CLIP" warning.
+      fp[4] = 0x00; 
+      fp[5] = 0x00; 
+      fp[6] = 0x4A; // Unified firmware version (74 dec)
       fp[7] = 0x00;
-    } else if (cc_addr == 1) {
-      // C0=1: report current RX frequency
-      fp[4] = (freq_hdr >> 24) & 0xFF;
-      fp[5] = (freq_hdr >> 16) & 0xFF;
-      fp[6] = (freq_hdr >> 8)  & 0xFF;
-      fp[7] =  freq_hdr        & 0xFF;
+    } 
+    else if (cc_addr == 1) {
+      // Slot 1: Section 4.3 says C1-C4 are for PA/Exciter Power.
+      // Frequency was being misinterpreted as a massive power spike.
+      // Leaving these as 0.0 for now will show a 0W reading in the host app.
+      fp[4] = 0x00; 
+      fp[5] = 0x00; 
+      fp[6] = 0x00; 
+      fp[7] = 0x00;
     }
-
     // 63 IQ sample pairs per frame, packed as 24-bit big-endian
     for (int s = 0; s < 63; s++) {
       int idx = frame * 63 + s;
