@@ -116,14 +116,14 @@ static double tx_hist_i[6] = {0};
 static double tx_hist_q[6] = {0};
 
 static void flush_tx_ring(void) {
-    tx_iq_wr = 0;
-    tx_iq_rd = 0;
-    tx_up_prev_i = 0.0;
-    tx_up_prev_q = 0.0;
-    
-    // Zero out the FIR history buffers
-    memset(tx_hist_i, 0, sizeof(tx_hist_i));
-    memset(tx_hist_q, 0, sizeof(tx_hist_q));
+  tx_iq_wr = 0;
+  tx_iq_rd = 0;
+  tx_up_prev_i = 0.0;
+  tx_up_prev_q = 0.0;
+  
+  // Zero out the FIR history buffers
+  memset(tx_hist_i, 0, sizeof(tx_hist_i));
+  memset(tx_hist_q, 0, sizeof(tx_hist_q));
 }
 
 // use 6-tap FIR filter to choose new mid-point
