@@ -15,7 +15,7 @@
 //   Initialization control and shutdown
 //    - sbitx.c needs to start and stop and get status on this interface
 //
-// thanks, to Dave N1AI and Juan WP3DN
+// Thanks to Dave N1AI and Juan WP3DN
 // Developed using NereusSDR/docs/protocols/openhpsdr-protocol1-capture-reference.md
 // Mike KB2ML
 
@@ -84,8 +84,8 @@ extern void tx_off(void);
 static double iq_buf_i[SAMPLES_PER_PACKET];
 static double iq_buf_q[SAMPLES_PER_PACKET];
 static int iq_buf_count = 0;
-static double hpsdr_iq_gain = 15.0; // add gain to I and Q data going out
-static double hpsdr_tx_gain = 30.0; // add gain to I and Q coming from external SDR
+static double hpsdr_iq_gain = 1.0;   // add gain to I and Q data going out
+static double hpsdr_tx_gain = 1.0;   // add gain to I and Q coming from external SDR app
 
 // TX IQ ring buffer statics
 #define TX_IQ_RING_SIZE 8192 // must be power of 2, ~85 ms at 96 kHz
