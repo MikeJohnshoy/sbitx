@@ -33,7 +33,7 @@
 // Signal Processing & Buffering (Section 1)
 static unsigned long millis_now(void);
 static void flush_tx_ring(void);
-static void tx_iq_push_48k(double i_val, double q_val);
+static void tx_upsample_and_push(double i_val, double q_val);
 // Public: hpsdr_tx_iq_active, hpsdr_get_tx_iq, hpsdr_send_iq (defined in .h)
 
 // HPSDR Protocol 1 Implementation (Section 2)
@@ -87,10 +87,6 @@ static int iq_buf_count = 0;
 static double hpsdr_iq_gain = 15.0; // add gain to I and Q data going out
 static double hpsdr_tx_gain = 30.0; // add gain to I and Q coming from external SDR
 
-// Filter state for the 24kHz LPF (stores the last sample of the previous block)
-static double last_i = 0.0;
-static double last_q = 0.0;
-
 // TX IQ ring buffer statics
 #define TX_IQ_RING_SIZE 8192 // must be power of 2, ~85 ms at 96 kHz
 #define TX_IQ_RING_MASK (TX_IQ_RING_SIZE - 1)
@@ -102,10 +98,6 @@ static volatile int tx_iq_rd = 0; // read by audio thread
 #define TX_IQ_TIMEOUT_MS 500
 static volatile unsigned long tx_iq_last_time_ms = 0;
 static volatile int hpsdr_tx_data_active = 0;
-
-// Previous sample for the 2× interpolation filter
-static double tx_up_prev_i = 0.0;
-static double tx_up_prev_q = 0.0;
 
 static unsigned long millis_now(void) {
   struct timespec ts;
