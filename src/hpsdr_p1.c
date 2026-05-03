@@ -57,7 +57,7 @@ static void *hpsdr_poll_thread(void *arg);
 // Configuration & Statics
 #define HPSDR_PORT 1024
 #define HPSDR_PKT_SIZE 1032
-#define SAMPLES_PER_PACKET 126
+#define SAMPLES_PER_PKT 126
 #define TX_SOFT 2
 
 static int hpsdr_sock = -1;
@@ -81,8 +81,8 @@ extern void tx_off(void);
 // =============================================================================
 
 // IQ accumulation buffer for 126 samples (48kHz)
-static double iq_buf_i[SAMPLES_PER_PACKET];
-static double iq_buf_q[SAMPLES_PER_PACKET];
+static double iq_buf_i[SAMPLES_PER_PKT];
+static double iq_buf_q[SAMPLES_PER_PKT];
 static int iq_buf_count = 0;
 static double hpsdr_iq_gain = 1.0;   // add gain to I and Q data going out
 static double hpsdr_tx_gain = 1.0;   // add gain to I and Q coming from external SDR app
@@ -241,7 +241,7 @@ static void rx_filter_and_decimate(double i0, double i1, double q0, double q1) {
   iq_buf_q[iq_buf_count] = filt_q * hpsdr_iq_gain;
   iq_buf_count++;
 
-  if (iq_buf_count >= SAMPLES_PER_PACKET) {
+  if (iq_buf_count >= SAMPLES_PER_PKT) {
     build_and_send_packet();
     iq_buf_count = 0;
   }
