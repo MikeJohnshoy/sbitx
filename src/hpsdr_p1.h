@@ -5,7 +5,7 @@
 
 #define HPSDR_PORT 1024
 #define HPSDR_PKT_SIZE 1032
-#define SAMPLES_PER_PACKET 126
+#define SAMPLES_PER_PKT 126
 
 // Packet types returned by hpsdr_classify()
 #define PKT_UNKNOWN   0
@@ -20,7 +20,7 @@ typedef struct {
     uint32_t freq;                      // RX NCO freq (addr 0x02)
     uint32_t tx_freq;                   // TX NCO freq (addr 0x01), 0 if not present
     int      n_samples;
-    float    iq[SAMPLES_PER_PACKET * 2];
+    float    iq[SAMPLES_PER_PKT * 2];
 } hpsdr_ep2_result_t;
 
 int  hpsdr_init(void);
