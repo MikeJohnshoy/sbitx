@@ -528,8 +528,24 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
   case PKT_DISCOVERY: {
     uint8_t reply[HPSDR_DISCOVERY_REPLY];
     hpsdr_build_discovery_reply(reply, client_active);
-    // Send directly back to whoever asked
-    sendto(hpsdr_sock, reply, sizeof(reply), 0, (struct sockaddr *)sender, sizeof(struct sockaddr_in));
+
+    // Send Unicast (Directly back to the requester)
+    // This works for Quisk and SDRConsole
+    sendto(hpsdr_sock, reply, sizeof(reply), 0, 
+           (struct sockaddr *)sender, sizeof(struct sockaddr_in));
+
+    // Send Broadcast (To everyone on the local subnet)
+    // This may required for Thetis to see the radio
+    struct sockaddr_in bcast_addr;
+    memset(&bcast_addr, 0, sizeof(bcast_addr));
+    bcast_addr.sin_family = AF_INET;
+    bcast_addr.sin_port = htons(HPSDR_PORT);
+    bcast_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
+
+    sendto(hpsdr_sock, reply, sizeof(reply), 0, 
+           (struct sockaddr *)&bcast_addr, sizeof(bcast_addr));
+
+    printf("hpsdr: sent dual-mode discovery reply\n");
     break;
 }
 
