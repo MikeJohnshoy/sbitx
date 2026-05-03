@@ -306,15 +306,10 @@ static void hpsdr_build_discovery_reply(uint8_t *reply, int in_use) {
   reply[5] = 0x1C; reply[6] = 0xC0; reply[7] = 0xA2;
   reply[8] = 0x22; reply[9] = 0x5B;
 
-  // comment out one board type ...
-  //reply[10] = 0x01; // Board type: Hermes
   reply[10] = 0x06; // Board type: Hermes-Lite
-
-  // comment out one firmware version
-  //reply[11] = 0x21;  // firmware version 3.3
   reply[11] = 0x4A; // Updated firmware version (74 dec) to match reference
   reply[19] = 0x01; // MetisVersion
-  reply[20] = 0x04; // NumRxs = 4
+  reply[20] = 0x01; // NumRxs = 1
 }
 
 // Inbound: EP2 (PKT_EP2 — TX IQ + C&C from SDR app)
@@ -455,7 +450,7 @@ static void build_and_send_packet(void) {
       case 0: // Slot 0: ADC Overload & Version
         fp[4] = 0x00; // C1: Bit 0 is ADC Overload (leave 0 to avoid false Clip)
         fp[5] = 0x00; // C2: Digital Inputs
-        fp[6] = 0x4A; // C3: Firmware Version
+        fp[6] = 0x4A; // C3: Firmware Version (74 dec)
         fp[7] = 0x00; // C4: Reserved
         break;
 
