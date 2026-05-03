@@ -307,8 +307,8 @@ static void hpsdr_build_discovery_reply(uint8_t *reply, int in_use) {
   reply[8] = 0x22; reply[9] = 0x5B;
 
   // comment out one board type ...
-  reply[10] = 0x01; // Board type: Hermes
-  //reply[10] = 0x06; // Board type: Hermes-Lite
+  //reply[10] = 0x01; // Board type: Hermes
+  reply[10] = 0x06; // Board type: Hermes-Lite
 
   // comment out one firmware version
   reply[11] = 0x21;  // firmware version 3.3
