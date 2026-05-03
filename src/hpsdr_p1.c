@@ -314,7 +314,7 @@ static void hpsdr_build_discovery_reply(uint8_t *reply, int in_use) {
   //reply[11] = 0x21;  // firmware version 3.3
   reply[11] = 0x4A; // Updated firmware version (74 dec) to match reference
   reply[19] = 0x01; // MetisVersion
-  reply[20] = 0x01; // NumRxs = 1
+  reply[20] = 0x04; // NumRxs = 4
 }
 
 // Inbound: EP2 (PKT_EP2 — TX IQ + C&C from SDR app)
