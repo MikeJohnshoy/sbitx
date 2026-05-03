@@ -526,15 +526,11 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
   switch (type) {
 
   case PKT_DISCOVERY: {
-  uint8_t reply[HPSDR_DISCOVERY_REPLY];
-  hpsdr_build_discovery_reply(reply, client_active);
-  struct sockaddr_in mcast_addr;
-  memset(&mcast_addr, 0, sizeof(mcast_addr));
-  mcast_addr.sin_family = AF_INET;
-  mcast_addr.sin_port = htons(HPSDR_PORT);
-  mcast_addr.sin_addr.s_addr = inet_addr(HPSDR_MCAST_ADDR);
-  sendto(hpsdr_sock, reply, sizeof(reply), 0, (struct sockaddr *)&mcast_addr, sizeof(mcast_addr));
-  break;
+    uint8_t reply[HPSDR_DISCOVERY_REPLY];
+    hpsdr_build_discovery_reply(reply, client_active);
+    // Send directly back to whoever asked
+    sendto(hpsdr_sock, reply, sizeof(reply), 0, (struct sockaddr *)sender, sizeof(struct sockaddr_in));
+    break;
 }
 
   case PKT_START:
