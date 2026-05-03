@@ -57,7 +57,7 @@ static void *hpsdr_poll_thread(void *arg);
 // Configuration & Statics
 #define HPSDR_PORT 1024
 #define HPSDR_PKT_SIZE 1032
-#define SAMPLES_PER_PKT 126
+#define SAMPLES_PER_PACKET 126
 #define TX_SOFT 2
 
 static int hpsdr_sock = -1;
@@ -81,8 +81,8 @@ extern void tx_off(void);
 // =============================================================================
 
 // IQ accumulation buffer for 126 samples (48kHz)
-static double iq_buf_i[SAMPLES_PER_PKT];
-static double iq_buf_q[SAMPLES_PER_PKT];
+static double iq_buf_i[SAMPLES_PER_PACKET];
+static double iq_buf_q[SAMPLES_PER_PACKET];
 static int iq_buf_count = 0;
 static double hpsdr_iq_gain = 1.0;   // add gain to I and Q data going out
 static double hpsdr_tx_gain = 1.0;   // add gain to I and Q coming from external SDR app
@@ -241,7 +241,7 @@ static void rx_filter_and_decimate(double i0, double i1, double q0, double q1) {
   iq_buf_q[iq_buf_count] = filt_q * hpsdr_iq_gain;
   iq_buf_count++;
 
-  if (iq_buf_count >= SAMPLES_PER_PKT) {
+  if (iq_buf_count >= SAMPLES_PER_PACKET) {
     build_and_send_packet();
     iq_buf_count = 0;
   }
@@ -307,8 +307,7 @@ static void hpsdr_build_discovery_reply(uint8_t *reply, int in_use) {
   reply[8] = 0x22; reply[9] = 0x5B;
 
   reply[10] = 0x06; // Board type: Hermes-Lite
-  reply[11] = 0x21;
-  //reply[11] = 0x4A; // Updated firmware version (74 dec) to match reference
+  reply[11] = 0x4A; // Updated firmware version (74 dec) to match reference
   reply[19] = 0x01; // MetisVersion
   reply[20] = 0x01; // NumRxs = 1
 }
@@ -451,8 +450,7 @@ static void build_and_send_packet(void) {
       case 0: // Slot 0: ADC Overload & Version
         fp[4] = 0x00; // C1: Bit 0 is ADC Overload (leave 0 to avoid false Clip)
         fp[5] = 0x00; // C2: Digital Inputs
-        fp[6] = 0x21;
-        //fp[6] = 0x4A; // C3: Firmware Version (74 dec)
+        fp[6] = 0x4A; // C3: Firmware Version (74 dec)
         fp[7] = 0x00; // C4: Reserved
         break;
 
@@ -529,27 +527,11 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
 
   case PKT_DISCOVERY: {
     uint8_t reply[HPSDR_DISCOVERY_REPLY];
-    hpsdr_build_discovery_reply(reply, client_active);
-
-    // Send Unicast (Directly back to the requester)
-    // This works for Quisk and SDRConsole
-    sendto(hpsdr_sock, reply, sizeof(reply), 0, 
-           (struct sockaddr *)sender, sizeof(struct sockaddr_in));
-
-    // Send Broadcast (To everyone on the local subnet)
-    // This may required for Thetis to see the radio
-    struct sockaddr_in bcast_addr;
-    memset(&bcast_addr, 0, sizeof(bcast_addr));
-    bcast_addr.sin_family = AF_INET;
-    bcast_addr.sin_port = htons(HPSDR_PORT);
-    bcast_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
-
-    sendto(hpsdr_sock, reply, sizeof(reply), 0, 
-           (struct sockaddr *)&bcast_addr, sizeof(bcast_addr));
-
-    printf("hpsdr: sent dual-mode discovery reply\n");
+    int same = (sender->sin_addr.s_addr == stream_dest.sin_addr.s_addr);
+    hpsdr_build_discovery_reply(reply, client_active && !same);
+    sendto(hpsdr_sock, reply, sizeof(reply), 0, (struct sockaddr *)sender, sizeof(*sender));
     break;
-}
+  }
 
   case PKT_START:
     stream_dest = *sender;
@@ -720,16 +702,6 @@ int hpsdr_init(void) {
   addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
   if (bind(hpsdr_sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-    close(hpsdr_sock);
-    hpsdr_sock = -1;
-    return -1;
-  }
-
-  // Join multicast group
-  struct ip_mreq mreq;
-  mreq.imr_multiaddr.s_addr = inet_addr(HPSDR_MCAST_ADDR);
-  mreq.imr_interface.s_addr = htonl(INADDR_ANY);
-  if (setsockopt(hpsdr_sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) < 0) {
     close(hpsdr_sock);
     hpsdr_sock = -1;
     return -1;
