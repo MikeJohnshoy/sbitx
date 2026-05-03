@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 
+#define HPSDR_MCAST_ADDR "239.255.255.250"
 #define HPSDR_PORT 1024
 #define HPSDR_PKT_SIZE 1032
 #define SAMPLES_PER_PKT 126
