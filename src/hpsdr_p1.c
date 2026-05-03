@@ -526,12 +526,16 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
   switch (type) {
 
   case PKT_DISCOVERY: {
-    uint8_t reply[HPSDR_DISCOVERY_REPLY];
-    int same = (sender->sin_addr.s_addr == stream_dest.sin_addr.s_addr);
-    hpsdr_build_discovery_reply(reply, client_active && !same);
-    sendto(hpsdr_sock, reply, sizeof(reply), 0, (struct sockaddr *)sender, sizeof(*sender));
-    break;
-  }
+  uint8_t reply[HPSDR_DISCOVERY_REPLY];
+  hpsdr_build_discovery_reply(reply, client_active);
+  struct sockaddr_in mcast_addr;
+  memset(&mcast_addr, 0, sizeof(mcast_addr));
+  mcast_addr.sin_family = AF_INET;
+  mcast_addr.sin_port = htons(HPSDR_PORT);
+  mcast_addr.sin_addr.s_addr = inet_addr(HPSDR_MCAST_ADDR);
+  sendto(hpsdr_sock, reply, sizeof(reply), 0, (struct sockaddr *)&mcast_addr, sizeof(mcast_addr));
+  break;
+}
 
   case PKT_START:
     stream_dest = *sender;
@@ -702,6 +706,16 @@ int hpsdr_init(void) {
   addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
   if (bind(hpsdr_sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+    close(hpsdr_sock);
+    hpsdr_sock = -1;
+    return -1;
+  }
+
+  // Join multicast group
+  struct ip_mreq mreq;
+  mreq.imr_multiaddr.s_addr = inet_addr(HPSDR_MCAST_ADDR);
+  mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+  if (setsockopt(hpsdr_sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) < 0) {
     close(hpsdr_sock);
     hpsdr_sock = -1;
     return -1;
