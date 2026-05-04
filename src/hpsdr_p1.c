@@ -1,11 +1,14 @@
 // hpsdr_p1.c — HPSDR Protocol 1 interface for sBitx
 //
-// Provide the interface between the sbitx and an external SDR app using hpsdr Protocol 1
+// Provide the interface between the sbitx and an external SDR app using HPSDR Protocol 1.
+// The sBitx tries to emulate a HermesLite to work with a number of existing SDR apps.
 // Major functions are:
 //   Signal processing and buffering:
 //    - manage a data buffer to prevent dropping data between the sbitx and external app
-//    - perform data rate conversion between sbitx internal 96k samples per second
-//      and the external SDR app 48k samples per second
+//    - Upsample (48k to 96k) using a 6-tap Polyphase FIR filter (Half-band filter)
+//      to calculate the midpoint samples
+//    - Decimation (96k to 48k) using a 31-tap half-band FIR filter to apply a 24kHz LPF
+//      before decimating the signal
 //   HPSDR Protocol 1:
 //    - identify packet types
 //    - add or extract I and Q and other controls and data, and copy in and out of buffer
