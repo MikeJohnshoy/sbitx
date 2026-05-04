@@ -16,7 +16,6 @@
 //    - sbitx.c needs to start and stop and get status on this interface
 //
 // Thanks to Dave N1AI and Juan WP3DN
-// Developed using NereusSDR/docs/protocols/openhpsdr-protocol1-capture-reference.md
 // Mike KB2ML
 
 #include "hpsdr_p1.h"
@@ -142,7 +141,7 @@ static void tx_upsample_and_push(double i_val, double q_val) {
   }
 
   // calculate the original sample (Phase 0)
-  // In a polyphase upconverter, we often use the center of the delay line
+  // In a polyphase upconverter, use the center of the delay line
   // to keep the phase aligned with the calculated midpoint.
   double out_i = tx_hist_i[2];
   double out_q = tx_hist_q[2];
