@@ -5,7 +5,7 @@
 // mixing
 //
 // vfo_read_iq() returns both the cosine (I) and sine (Q) of the current phase.
-// Both values are returned in essentially the same timae as real-only output.
+// Both values are returned in essentially the same time as real-only output.
 
 #include "sdr.h"
 #include <complex.h>
