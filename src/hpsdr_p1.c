@@ -565,7 +565,7 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     hpsdr_ep2_result_t r;
     hpsdr_unpack_ep2(buf, len, &r);
 
-    apply_freq_from_ep2((r.mox && r.tx_freq) ? r.tx_freq : r.freq);
+    apply_freq_from_ep2(r.tx_freq ? r.tx_freq : r.freq);  // sBitx follow SDR app tx_freq
     apply_mox_from_ep2(r.mox);
 
     if (r.n_samples > 0) {
