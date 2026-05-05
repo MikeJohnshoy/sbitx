@@ -574,9 +574,13 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     if (r.tx_freq) last_tx_freq = r.tx_freq;
     if (r.freq)    last_rx_freq = r.freq;
 
-    // Prefer tx_freq once we have one; fall back to rx_freq only before
-    // the first tx_freq slot has been received.
-    apply_freq_from_ep2(last_tx_freq ? last_tx_freq : last_rx_freq);
+    // Apply whichever frequency slot fired this round-robin cycle.
+    // tx_freq wins if both arrived in the same packet (very unlikely),
+    // but rx_freq is applied on its own cycle — so SDRConsole tuning works.
+    if (r.tx_freq)
+      apply_freq_from_ep2(r.tx_freq);
+    else if (r.freq)
+      apply_freq_from_ep2(r.freq);
     apply_mox_from_ep2(r.mox);
 
     if (r.n_samples > 0) {
