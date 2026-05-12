@@ -23,15 +23,22 @@
 // Thanks to Dave N1AI and Juan WP3DN
 // Mike KB2ML
 
-#include "hpsdr_p1.h"
-#include <arpa/inet.h>
-#include <gtk/gtk.h>
-#include <pthread.h>
+// System
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
+
+// Networking
+#include <arpa/inet.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+// UI/Framework
+#include <gtk/gtk.h>
+
+// Local
+#include "hpsdr_p1.h"
 
 // function prototypes
 // Signal Processing & Buffering (Section 1)
