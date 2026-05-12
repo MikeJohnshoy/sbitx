@@ -78,6 +78,7 @@ static volatile int running = 0;
 static uint32_t tx_seq = 0;
 static pthread_t poll_thread;
 static volatile int tr_pending = 0;
+static int hpsdr_sample_rate = 48000; // Default to 48kHz
 
 // Externs for sBitx core interaction
 extern void remote_execute(char *command);
@@ -261,10 +262,24 @@ static void rx_filter_and_decimate(double i0, double i1, double q0, double q1) {
 void hpsdr_send_iq(double *i_samples, double *q_samples, int n) {
     if (!client_active || hpsdr_sock < 0) return;
 
-    // Iterate in steps of 2 to convert 96kHz pairs into 48kHz singles
-    for (int k = 0; k < n - 1; k += 2) {
+    if (hpsdr_sample_rate == 48000) {
+      // Apply 2:1 decimation (96k -> 48k)
+      for (int k = 0; k < n - 1; k += 2) {
         rx_filter_and_decimate(i_samples[k], i_samples[k+1], 
-                               q_samples[k], q_samples[k+1]);
+                                 q_samples[k], q_samples[k+1]);
+      }
+    } else {
+      // Pass-through (96k)
+      for (int k = 0; k < n; k++) {
+        iq_buf_i[iq_buf_count] = i_samples[k] * hpsdr_iq_gain;
+        iq_buf_q[iq_buf_count] = q_samples[k] * hpsdr_iq_gain;
+        iq_buf_count++;
+
+        if (iq_buf_count >= SAMPLES_PER_PKT) {
+          build_and_send_packet();
+          iq_buf_count = 0;
+        }
+      }
     }
 }
 
@@ -352,8 +367,13 @@ static int hpsdr_unpack_ep2(const uint8_t *buf, int len, hpsdr_ep2_result_t *res
 
     // 19-Step Round-Robin Command Decoding (Section 5.4)
     switch (addr) {
-      case 0x00: // Case 0: General Settings (Sample Rate, nddc, etc.)
-        // Stub: Add logic for Sample Rate (C1 bits 1:0) if needed
+      case 0x00: // Case 0: General Settings
+        {
+        uint8_t rate_bits = ptr[4] & 0x03; // Bits 1:0 of C1
+        if (rate_bits == 0) hpsdr_sample_rate = 48000;
+        else if (rate_bits == 1) hpsdr_sample_rate = 96000;
+        // higher rates are not supported
+        }
         break;
 
       case 0x01: // Case 1: TX VFO Frequency
@@ -548,6 +568,7 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     stream_dest = *sender;
     tx_seq = 0;
     iq_buf_count = 0;
+    hpsdr_sample_rate = 48000; // Reset to default
     reset_all_tx_state();
     client_active = 1;
     printf("hpsdr: streaming STARTED to %s:%d\n", inet_ntoa(stream_dest.sin_addr),
