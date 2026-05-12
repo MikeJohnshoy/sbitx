@@ -1,6 +1,3 @@
-#ifndef HPSDR_P1_H
-#define HPSDR_P1_H
-
 #include <stdint.h>
 
 #define HPSDR_MCAST_ADDR "255.255.255.255"
@@ -37,5 +34,3 @@ int  hpsdr_tx_iq_active(void);
 // Retrieve up to max_samples of 96kHz-upsampled TX IQ.
 // Returns the number of sample pairs actually written.
 int  hpsdr_get_tx_iq(double *out_i, double *out_q, int max_samples);
-
-#endif // HPSDR_P1_H
