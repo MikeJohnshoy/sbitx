@@ -561,22 +561,11 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
   case PKT_EP2: {
     if (!client_active) break;
     ep2_last_time_ms = millis_now();
-
+    
     hpsdr_ep2_result_t r;
     hpsdr_unpack_ep2(buf, len, &r);
 
-    // Persist the last known tx and rx frequencies across round-robin cycles.
-    // Each EP2 packet only populates the slot that fired this cycle; the rest
-    // are zero.  Without statics the ternary would oscillate between tx_freq
-    // and rx_freq on alternate round-robin ticks.
-    static uint32_t last_tx_freq = 0;
-    static uint32_t last_rx_freq = 0;
-    if (r.tx_freq) last_tx_freq = r.tx_freq;
-    if (r.freq)    last_rx_freq = r.freq;
-
-    // Use rx_freq as authoritative once seen (SDRConsole sets freq via slot 0x02).
-    // Fall back to tx_freq only if rx_freq has never arrived (SparkSDR uses slot 0x01 only).
-    apply_freq_from_ep2(last_rx_freq ? last_rx_freq : last_tx_freq);
+    apply_freq_from_ep2((r.mox && r.tx_freq) ? r.tx_freq : r.freq);
     apply_mox_from_ep2(r.mox);
 
     if (r.n_samples > 0) {
