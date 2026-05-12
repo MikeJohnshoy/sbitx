@@ -18,6 +18,8 @@
 //   Initialization control and shutdown
 //    - sbitx.c needs to start and stop and get status on this interface
 //
+// There is support for data moving in both directions but the focus has been on receive functions.
+// 
 // Thanks to Dave N1AI and Juan WP3DN
 // Mike KB2ML
 
