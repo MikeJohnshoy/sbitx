@@ -252,7 +252,7 @@ void hpsdr_send_iq(double *i_samples, double *q_samples, int n) {
 //           → hpsdr_get_tx_iq()  [consumed by sBitx audio thread]
 //
 // Thread safety: tx_iq_wr is written only by the poll thread; tx_iq_rd is
-// written only by the audio thread. Both are volatile int — sufficient for a
+// written only by the audio thread. Both are _Atomic uint32_t — sufficient for a
 // single-producer/single-consumer ring on a cache-coherent architecture.
 
 // Lock-free ring buffer (size must be a power of two)
@@ -260,8 +260,8 @@ void hpsdr_send_iq(double *i_samples, double *q_samples, int n) {
 #define TX_IQ_RING_MASK (TX_IQ_RING_SIZE - 1)
 static double       tx_iq_ring_i[TX_IQ_RING_SIZE];
 static double       tx_iq_ring_q[TX_IQ_RING_SIZE];
-static _Atomic uint tx_iq_wr = 0;  // written by poll thread
-static _Atomic uint tx_iq_rd = 0;  // written by audio thread
+static _Atomic uint32_t tx_iq_wr = 0;  // written by poll thread
+static _Atomic uint32_t tx_iq_rd = 0;  // written by audio thread
 
 // Declare the TX IQ stream stale if no new data arrives within this window
 #define TX_IQ_TIMEOUT_MS 500
@@ -282,7 +282,7 @@ static void flush_tx_ring(void) {
   atomic_store_explicit(&tx_iq_rd, 0, memory_order_seq_cst);
   memset(tx_hist_i, 0, sizeof(tx_hist_i));
   memset(tx_hist_q, 0, sizeof(tx_hist_q));
-
+}
 
 // Upsample one 48 kHz IQ sample pair to two 96 kHz samples and push both
 // into the TX ring buffer.
@@ -344,23 +344,22 @@ int hpsdr_tx_iq_active(void) {
     return 0;
   if (millis_now() - tx_iq_last_time_ms > TX_IQ_TIMEOUT_MS)
     return 0;
-  return ((tx_iq_wr - tx_iq_rd) > 0);
+  uint32_t wr = atomic_load_explicit(&tx_iq_wr, memory_order_acquire);
+  uint32_t rd = atomic_load_explicit(&tx_iq_rd, memory_order_relaxed);
+  return ((uint32_t)(wr - rd) > 0);
 }
 
-// Copy up to max_samples 96 kHz IQ pairs out of the ring buffer into the
-// caller's arrays. Returns the number of pairs actually copied.
-// Called by the sBitx audio thread.
 int hpsdr_get_tx_iq(double *out_i, double *out_q, int max_samples) {
-  int rd    = tx_iq_rd;
-  int avail = tx_iq_wr - rd;
-  if (avail < 0) avail = 0;
-  int n = (avail < max_samples) ? avail : max_samples;
+  uint32_t rd    = atomic_load_explicit(&tx_iq_rd, memory_order_relaxed);
+  uint32_t wr    = atomic_load_explicit(&tx_iq_wr, memory_order_acquire);
+  uint32_t avail = (uint32_t)(wr - rd);
+  int n = ((int)avail < max_samples) ? (int)avail : max_samples;
 
   for (int k = 0; k < n; k++) {
     out_i[k] = tx_iq_ring_i[(rd + k) & TX_IQ_RING_MASK];
     out_q[k] = tx_iq_ring_q[(rd + k) & TX_IQ_RING_MASK];
   }
-  tx_iq_rd = rd + n;
+  atomic_store_explicit(&tx_iq_rd, rd + (uint32_t)n, memory_order_release);
   return n;
 }
 
