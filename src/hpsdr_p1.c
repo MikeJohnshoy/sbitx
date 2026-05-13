@@ -667,9 +667,9 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
 // differs from the current sBitx tuned frequency.
 static void apply_freq_from_ep2(uint32_t freq) {
   if (freq > 0 && freq != (uint32_t)freq_hdr) {
-    printf("hpsdr: remote set freq %d Hz\n", freq);
+    printf("hpsdr: remote set freq %u Hz\n", freq);
     char cmd[50];
-    sprintf(cmd, "freq %d", freq);
+    snprintf(cmd, sizeof(cmd), "freq %u", freq);
     remote_execute(cmd);
   }
 }
