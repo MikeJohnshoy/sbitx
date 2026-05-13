@@ -762,7 +762,7 @@ static gboolean hpsdr_watchdog(gpointer data) {
   (void)data;
   if (!running)
     return G_SOURCE_REMOVE;
-  if (in_tx && (millis_now() - ep2_last_time_ms > EP2_WATCHDOG_MS)) {
+  if (client_active && in_tx && (millis_now() - ep2_last_time_ms > EP2_WATCHDOG_MS)) {
     printf("hpsdr watchdog: no EP2 for >%dms — forcing RX\n", EP2_WATCHDOG_MS);
     reset_all_tx_state();
     tx_off();
