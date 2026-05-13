@@ -1,7 +1,9 @@
 // hpsdr_p1.c — HPSDR Protocol 1 interface for sBitx
 //
 // Provides the interface between the sBitx and an external SDR application
-// using HPSDR Protocol 1, emulating a HermesLite radio.
+// using HPSDR Protocol 1, emulating a HermesLite radio.  With no SDR app present, 
+// the module does nothing but listen on the UDP socket — completely invisible to
+// normal sBitx operation.
 //
 // Data flow:
 //   RX (sBitx → SDR app):  audio thread → hpsdr_send_iq() → [96k→48k decimation]
