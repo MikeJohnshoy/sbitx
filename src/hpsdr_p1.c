@@ -3,18 +3,18 @@
 // Provides the interface between the sBitx and an external SDR application
 // using HPSDR Protocol 1, emulating a HermesLite radio.
 //
-// Data flow overview:
+// Data flow:
 //   RX (sBitx → SDR app):  audio thread → hpsdr_send_iq() → [96k→48k decimation]
 //                           → iq_buf → build_and_send_packet() → UDP/EP6 → SDR app
 //   TX (SDR app → sBitx):  UDP/EP2 → hpsdr_unpack_ep2() → [48k→96k upsampling]
 //                           → tx_iq_ring → hpsdr_get_tx_iq() → audio thread
 //
 // Major sections:
-//   1. RX Signal Processing     — 96k→48k half-band decimation, EP6 frame staging
-//   2. TX Signal Processing     — 48k→96k polyphase upsampling, ring buffer, public API
-//   3. HPSDR Protocol 1         — packet I/O: classify, pack/unpack EP2/EP6, session control
-//   4. sBitx State Integration  — translate HPSDR state into sBitx core calls (freq, T/R)
-//   5. Initialization, Control & Shutdown — socket setup, poll thread, watchdog
+//  1. RX Signal Processing:  96k→48k half-band decimation, EP6 frame staging
+//  2. TX Signal Processing;  48k→96k polyphase upsampling, ring buffer, public API
+//  3. HPSDR Protocol 1:      packet I/O: classify, pack/unpack EP2/EP6, session control
+//  4. sBitx State Integration:  translate HPSDR state into sBitx core calls (freq, T/R)
+//  5. Initialization, Control & Shutdown:  socket setup, poll thread, watchdog
 //
 // There is support for data moving in both directions but the focus has been on receive functions.
 //
@@ -134,8 +134,7 @@ static unsigned long millis_now(void) {
 // =============================================================================
 // SECTION 1 — RX SIGNAL PROCESSING
 // =============================================================================
-//
-// Responsibility: accept 96 kHz dual-channel IQ from the sBitx audio thread,
+// accept 96 kHz dual-channel IQ from the sBitx audio thread,
 // optionally decimate 2:1 to 48 kHz using a half-band FIR, stage the result
 // into iq_buf, and trigger an EP6 packet to the SDR app when the buffer is full.
 //
@@ -240,8 +239,7 @@ void hpsdr_send_iq(double *i_samples, double *q_samples, int n) {
 // =============================================================================
 // SECTION 2 — TX SIGNAL PROCESSING
 // =============================================================================
-//
-// Responsibility: accept 48 kHz TX IQ from the SDR app (via hpsdr_unpack_ep2),
+// accept 48 kHz TX IQ from the SDR app (via hpsdr_unpack_ep2),
 // upsample 2:1 to 96 kHz using a 6-tap polyphase FIR, and store the result in
 // a lock-free ring buffer for consumption by the sBitx audio thread.
 //
@@ -301,7 +299,7 @@ static void tx_upsample_and_push(double i_val, double q_val) {
   tx_hist_q[0] = q_val;
 
   // 6-tap polyphase coefficients for the interpolated midpoint (Phase 1).
-  // Provides a sharper cutoff at 24 kHz than simple linear interpolation.
+  // (replaced simple linear interpolation)
   static const double taps[6] = {0.0121, -0.0551, 0.2930,
                                   0.2930, -0.0551, 0.0121};
 
@@ -367,8 +365,7 @@ int hpsdr_get_tx_iq(double *out_i, double *out_q, int max_samples) {
 // =============================================================================
 // SECTION 3 — HPSDR PROTOCOL 1
 // =============================================================================
-//
-// Responsibility: all packet-level I/O between this module and the SDR app.
+//  all packet-level I/O between this module and the SDR app.
 // No sBitx hardware state is changed here; that is delegated to Section 4.
 //
 // Inbound  (SDR app → sBitx): PKT_DISCOVERY, PKT_START, PKT_STOP, PKT_EP2
@@ -481,7 +478,6 @@ static int hpsdr_unpack_ep2(const uint8_t *buf, int len, hpsdr_ep2_result_t *res
 
     // Advance past the 8-byte sync+C&C header to the IQ payload
     ptr += 8;
-
     // Unpack 63 TX IQ sample pairs per USB frame (Section 8.4).
     // Each group is 8 bytes: [L audio 0-1][R audio 2-3][I 4-5][Q 6-7]
     for (int j = 0; j < 63 && result->n_samples < SAMPLES_PER_PKT; j++) {
@@ -495,7 +491,6 @@ static int hpsdr_unpack_ep2(const uint8_t *buf, int len, hpsdr_ep2_result_t *res
       result->n_samples++;
     }
   }
-
   return result->n_samples;
 }
 
@@ -651,14 +646,13 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     break;
   }
 
-  } // switch
+  }   // switch statement
 }
 
 // =============================================================================
 // SECTION 4 — sBITX STATE INTEGRATION
 // =============================================================================
-//
-// Responsibility: translate HPSDR protocol state into sBitx hardware/core
+// translate HPSDR protocol state into sBitx hardware/core
 // actions. No packet I/O happens here; this section only drives the sBitx
 // externals (remote_execute, tx_on, tx_off) in response to decoded EP2 data.
 //
@@ -746,8 +740,7 @@ static gboolean hpsdr_tr_idle(gpointer data) {
 // =============================================================================
 // SECTION 5 — INITIALIZATION, CONTROL & SHUTDOWN
 // =============================================================================
-//
-// Responsibility: manage the lifecycle of the HPSDR interface — open/close the
+// manage the lifecycle of the HPSDR interface — open/close the
 // UDP socket, spawn the poll thread, run the EP2 watchdog, and expose the
 // public control API used by sbitx.c.
 //
