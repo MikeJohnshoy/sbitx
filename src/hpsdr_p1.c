@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <stdatomic.h>
 
 // Networking
 #include <arpa/inet.h>
@@ -259,8 +260,8 @@ void hpsdr_send_iq(double *i_samples, double *q_samples, int n) {
 #define TX_IQ_RING_MASK (TX_IQ_RING_SIZE - 1)
 static double       tx_iq_ring_i[TX_IQ_RING_SIZE];
 static double       tx_iq_ring_q[TX_IQ_RING_SIZE];
-static volatile int tx_iq_wr = 0;   // written by poll thread
-static volatile int tx_iq_rd = 0;   // written by audio thread
+static _Atomic uint tx_iq_wr = 0;  // written by poll thread
+static _Atomic uint tx_iq_rd = 0;  // written by audio thread
 
 // Declare the TX IQ stream stale if no new data arrives within this window
 #define TX_IQ_TIMEOUT_MS 500
@@ -277,11 +278,11 @@ static double tx_hist_q[6] = {0};
 // Called on session start, MOX-off, and watchdog timeout to prevent stale
 // TX samples from leaking into a new transmission.
 static void flush_tx_ring(void) {
-  tx_iq_wr = 0;
-  tx_iq_rd = 0;
+  atomic_store_explicit(&tx_iq_wr, 0, memory_order_seq_cst);
+  atomic_store_explicit(&tx_iq_rd, 0, memory_order_seq_cst);
   memset(tx_hist_i, 0, sizeof(tx_hist_i));
   memset(tx_hist_q, 0, sizeof(tx_hist_q));
-}
+
 
 // Upsample one 48 kHz IQ sample pair to two 96 kHz samples and push both
 // into the TX ring buffer.
@@ -314,10 +315,10 @@ static void tx_upsample_and_push(double i_val, double q_val) {
   double out_i = tx_hist_i[2];
   double out_q = tx_hist_q[2];
 
-  // Drop both samples if the ring is nearly full (overflow guard)
-  int wr = tx_iq_wr;
-  int rd = tx_iq_rd;
-  if ((wr - rd) >= (TX_IQ_RING_SIZE - 4))
+   // Drop both samples if the ring is nearly full (overflow guard)
+  uint32_t wr = atomic_load_explicit(&tx_iq_wr, memory_order_relaxed);
+  uint32_t rd = atomic_load_explicit(&tx_iq_rd, memory_order_acquire);
+  if ((uint32_t)(wr - rd) >= (TX_IQ_RING_SIZE - 4))
     return;
 
   // Write midpoint first, then aligned original (chronological order)
@@ -329,7 +330,8 @@ static void tx_upsample_and_push(double i_val, double q_val) {
   tx_iq_ring_q[wr & TX_IQ_RING_MASK] = out_q;
   wr++;
 
-  tx_iq_wr = wr;
+  // release: guarantees ring data is visible before the new index is
+  atomic_store_explicit(&tx_iq_wr, wr, memory_order_release);
   tx_iq_last_time_ms = millis_now();
 }
 
@@ -752,6 +754,7 @@ static gboolean hpsdr_tr_idle(gpointer data) {
 
 // Poll thread handle — used only within this section
 static pthread_t poll_thread;
+static int       poll_thread_started = 0;
 
 // Force RX after this many ms of EP2 silence while in TX
 #define EP2_WATCHDOG_MS 3500
@@ -823,18 +826,23 @@ void hpsdr_stop(void) {
     close(hpsdr_sock);
     hpsdr_sock = -1;
   }
+  if (poll_thread_started) {
+    pthread_join(poll_thread, NULL);   // blocks until poll thread exits cleanly
+    poll_thread_started = 0;           // reset so hpsdr_init/poll can restart safely
+  }
 }
 
 // Returns 1 if a client session is currently active.
-int hpsdr_is_connected(void) { return client_active; }
+int hpsdr_is_connected(void) {
+  return client_active;
+}
 
 // Start the poll thread and watchdog timer on the first call after hpsdr_init().
 // Safe to call repeatedly — the thread and timer are created only once.
 void hpsdr_poll(void) {
-  static int started = 0;
-  if (!started && running) {
+  if (!poll_thread_started && running) {
     pthread_create(&poll_thread, NULL, hpsdr_poll_thread, NULL);
-    g_timeout_add(250, hpsdr_watchdog, NULL); // fire every 250 ms on GTK thread
-    started = 1;
+    g_timeout_add(250, hpsdr_watchdog, NULL);
+    poll_thread_started = 1;
   }
 }
