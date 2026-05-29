@@ -122,6 +122,12 @@ static volatile int           tr_pending           = 0;
 static volatile unsigned long ep2_last_time_ms     = 0;
 static volatile int           hpsdr_tx_data_active = 0;
 
+// Last non-zero VFO frequencies seen across the 19-slot C&C round-robin
+// persisted because addr 0x01 (TX VFO) and 0x02 (RX VFO) each appear only
+// once per 19 EP2 frames — they are zero in every other frame.
+static uint32_t last_rx_freq = 0;   // most recent EP2 addr 0x02 (spectrum center)
+static uint32_t last_tx_freq = 0;   // most recent EP2 addr 0x01 (selected signal)
+
 // -----------------------------------------------------------------------------
 // Shared utility
 // -----------------------------------------------------------------------------
@@ -615,6 +621,8 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     iq_buf_count      = 0;
     hpsdr_sample_rate = 48000; // reset to default; client will re-negotiate
     reset_all_tx_state();
+    last_rx_freq = 0;
+    last_tx_freq = 0;
     client_active = 1;
     printf("hpsdr: streaming STARTED to %s:%d\n",
            inet_ntoa(stream_dest.sin_addr), ntohs(stream_dest.sin_port));
@@ -640,8 +648,16 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     hpsdr_ep2_result_t r;
     hpsdr_unpack_ep2(buf, len, &r);
 
-    // While transmitting, tune to the TX VFO; otherwise track the RX VFO
-    apply_freq_from_ep2((r.mox && r.tx_freq) ? r.tx_freq : r.freq);
+    // Persist non-zero VFO updates across the 19-slot round-robin gap.
+    // addr 0x01 (tx_freq) and addr 0x02 (freq) are each zero in 18 of 19 frames.
+    if (r.freq)    last_rx_freq = r.freq;
+    if (r.tx_freq) last_tx_freq = r.tx_freq;
+    
+    // Track the correct VFO for the current *committed* (debounced) MOX state.
+    // last_tx_freq is the SDR app's selected signal; last_rx_freq is the
+    // spectrum center.  Using remote_mox (not r.mox) here so we follow the
+    // debounced committed state, not a single potentially-spurious packet.
+    apply_freq_from_ep2(remote_mox && last_tx_freq ? last_tx_freq : last_rx_freq);
     apply_mox_from_ep2(r.mox);
 
     for (int k = 0; k < r.n_samples; k++)
@@ -699,6 +715,8 @@ static void apply_mox_from_ep2(int mox) {
       remote_mox = mox_pending_state;
       mox_count  = 0;
       if (remote_mox) {
+        // Tune to the selected-signal TX VFO *before* the T/R switch fires
+        if (last_tx_freq) apply_freq_from_ep2(last_tx_freq);
         hpsdr_tx_data_active = 1;
         printf("hpsdr: MOX ON (debounced)\n");
         if (tr_pending != 1) {
@@ -708,6 +726,8 @@ static void apply_mox_from_ep2(int mox) {
       } else {
         hpsdr_tx_data_active = 0;
         flush_tx_ring();
+        // Restore the RX spectrum centre VFO when returning to receive
+        if (last_rx_freq) apply_freq_from_ep2(last_rx_freq);
         printf("hpsdr: MOX OFF (debounced)\n");
         if (tr_pending != 2) {
           tr_pending = 2;
