@@ -661,7 +661,14 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     // The operator's selected signal is always last_rx_freq — this is "RX 1"
     // in SDR Console and the spectrum centre in SPARK SDR.  We follow this
     // frequency whether in RX or TX (simplex operation).
-    apply_freq_from_ep2(last_rx_freq);
+    if (r.freq)    last_rx_freq = r.freq;
+    if (r.tx_freq) last_tx_freq = r.tx_freq;
+
+    // During RX, follow the spectrum LO continuously.
+    // During TX, skip — hardware freq was set in hpsdr_tr_idle and must
+    // not be overridden back to the RX LO on every EP2 packet.
+    if (!remote_mox)
+      apply_freq_from_ep2(last_rx_freq);
     apply_mox_from_ep2(r.mox);
 
     for (int k = 0; k < r.n_samples; k++)
@@ -755,14 +762,17 @@ static gboolean hpsdr_tr_idle(gpointer data) {
   tr_pending = 0;
 
   if (action == 1 && !in_tx) {
-   // Tune to the operator's selected signal (addr 0x01) before keying.
-   // addr 0x02 (last_rx_freq) is the LO/spectrum-center — wrong for TX.
-  // addr 0x01 (last_tx_freq) is "RX 1" in SDR Console / center in SPARK SDR.
-  if (last_tx_freq) {
+    // addr 0x01 = operator's selected signal ("RX 1" in SDR Console).
+    // For SPARK SDR the selected signal is always the spectrum center so
+    // last_tx_freq == last_rx_freq; fall back to last_rx_freq if addr 0x01
+    // was never received.
+    uint32_t tx_freq = last_tx_freq ? last_tx_freq : last_rx_freq;
+    if (tx_freq) {
       char cmd[50];
-      snprintf(cmd, sizeof(cmd), "r1:freq %u", last_tx_freq);
+      snprintf(cmd, sizeof(cmd), "freq %u", tx_freq);
       cmd_exec(cmd);
-  }
+      printf("hpsdr_tr_idle: set TX freq to %u Hz\n", tx_freq);
+    }
     printf("hpsdr_tr_idle: switching to TX\n");
     tx_on(TX_SOFT);
   } else if (action == 2) {
