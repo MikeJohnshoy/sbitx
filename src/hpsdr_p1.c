@@ -714,7 +714,7 @@ static void apply_mox_from_ep2(int mox) {
       mox_count  = 0;
       if (remote_mox) {
         // Tune to operator's selected signal before the T/R switch fires
-        if (last_rx_freq) apply_freq_from_ep2(last_rx_freq);
+        //if (last_rx_freq) apply_freq_from_ep2(last_rx_freq);
         hpsdr_tx_data_active = 1;
         printf("hpsdr: MOX ON (debounced)\n");
         if (tr_pending != 1) {
@@ -749,6 +749,13 @@ static gboolean hpsdr_tr_idle(gpointer data) {
   tr_pending = 0;
 
   if (action == 1 && !in_tx) {
+    // Set frequency synchronously here, on the GTK main thread,
+    // so it is committed before tx_on() reads r1:freq.
+    if (last_rx_freq) {
+      char cmd[50];
+      snprintf(cmd, sizeof(cmd), "r1:freq %u", last_rx_freq);
+      cmd_exec(cmd);
+    }
     printf("hpsdr_tr_idle: switching to TX\n");
     tx_on(TX_SOFT);
   } else if (action == 2) {
