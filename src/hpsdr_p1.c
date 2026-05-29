@@ -127,8 +127,10 @@ static volatile int           hpsdr_tx_data_active = 0;
 // persisted because the C&C round-robin only delivers this slot once every
 // 19 frames — it is zero in the other 18.  This is the operator's selected
 // signal frequency in both SDR Console (shown as "RX 1") and SPARK SDR
-// (always at spectrum center), and is used as the TX frequency on MOX.
+// (always at spectrum center).
 static uint32_t last_rx_freq = 0;
+// Last non-zero TX VFO frequency seen in EP2 addr 0x01.
+static uint32_t last_tx_freq = 0;
 
 // -----------------------------------------------------------------------------
 // Shared utility
@@ -624,6 +626,7 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     hpsdr_sample_rate = 48000; // reset to default; client will re-negotiate
     reset_all_tx_state();
     last_rx_freq = 0;
+    last_tx_freq = 0;
     client_active = 1;
     printf("hpsdr: streaming STARTED to %s:%d\n",
            inet_ntoa(stream_dest.sin_addr), ntohs(stream_dest.sin_port));
@@ -652,6 +655,8 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     // Persist the RX1 frequency across the 19-slot round-robin gap.
     // addr 0x02 is zero in 18 of every 19 frames.
     if (r.freq) last_rx_freq = r.freq;
+    // persist tx_freq too
+    if (r.tx_freq) last_tx_freq = r.tx_freq;
 
     // The operator's selected signal is always last_rx_freq — this is "RX 1"
     // in SDR Console and the spectrum centre in SPARK SDR.  We follow this
@@ -750,13 +755,14 @@ static gboolean hpsdr_tr_idle(gpointer data) {
   tr_pending = 0;
 
   if (action == 1 && !in_tx) {
-    // Set frequency synchronously here, on the GTK main thread,
-    // so it is committed before tx_on() reads r1:freq.
-    if (last_rx_freq) {
+   // Tune to the operator's selected signal (addr 0x01) before keying.
+   // addr 0x02 (last_rx_freq) is the LO/spectrum-center — wrong for TX.
+  // addr 0x01 (last_tx_freq) is "RX 1" in SDR Console / center in SPARK SDR.
+  if (last_tx_freq) {
       char cmd[50];
-      snprintf(cmd, sizeof(cmd), "r1:freq %u", last_rx_freq);
+      snprintf(cmd, sizeof(cmd), "r1:freq %u", last_tx_freq);
       cmd_exec(cmd);
-    }
+  }
     printf("hpsdr_tr_idle: switching to TX\n");
     tx_on(TX_SOFT);
   } else if (action == 2) {
