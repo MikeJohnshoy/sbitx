@@ -89,6 +89,7 @@ extern int  in_tx;
 extern void tr_switch(int tx_on);
 extern void tx_on(int trigger);
 extern void tx_off(void);
+extern void cmd_exec(char *cmd);
 
 // -----------------------------------------------------------------------------
 // Shared statics — variables accessed by two or more sections
