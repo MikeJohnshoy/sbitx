@@ -129,6 +129,9 @@ static volatile int           hpsdr_tx_data_active = 0;
 // signal frequency in both SDR Console (shown as "RX 1") and SPARK SDR
 // (always at spectrum center).
 static uint32_t last_rx_freq = 0;
+// Last non-zero TX VFO frequency seen in EP2 addr 0x01.
+// In SPARK SDR this is the selected signal frequency (spectrum center).
+static uint32_t last_tx_freq = 0;
 
 // -----------------------------------------------------------------------------
 // Shared utility
@@ -626,6 +629,7 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     hpsdr_sample_rate = 48000; // reset to default; client will re-negotiate
     reset_all_tx_state();
     last_rx_freq = 0;
+    last_tx_freq = 0;
     client_active = 1;
     printf("hpsdr: streaming STARTED to %s:%d\n",
            inet_ntoa(stream_dest.sin_addr), ntohs(stream_dest.sin_port));
@@ -654,6 +658,7 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     // Persist the RX1 frequency across the 19-slot round-robin gap.
     // addr 0x02 is zero in 18 of every 19 frames.
     if (r.freq) last_rx_freq = r.freq;
+    if (r.tx_freq) last_tx_freq = r.tx_freq;
 
     // During RX, follow the spectrum LO continuously.
     // During TX, skip — hardware freq was set in hpsdr_tr_idle and must
@@ -757,7 +762,7 @@ static gboolean hpsdr_tr_idle(gpointer data) {
     // For SPARK SDR the selected signal is always the spectrum center so
     // last_tx_freq == last_rx_freq; fall back to last_rx_freq if addr 0x01
     // was never received.
-    uint32_t tx_freq = last_rx_freq;
+    uint32_t tx_freq = last_tx_freq ? last_tx_freq : last_rx_freq;
     printf("hpsdr_tr_idle: last_rx_freq=%u freq_hdr=%d\n", last_rx_freq, freq_hdr);
     if (tx_freq) {
       char cmd[50];
@@ -806,7 +811,7 @@ static gboolean hpsdr_watchdog(gpointer data) {
   // initiating it via MOX.  Correct the frequency to the SDR app's selected
   // signal now that we're on the GTK main thread where cmd_exec is safe.
   if (client_active && in_tx && !last_in_tx) {
-    uint32_t tx_freq = last_rx_freq;
+    uint32_t tx_freq = last_tx_freq ? last_tx_freq : last_rx_freq;
     if (tx_freq) {
       char cmd[50];
       snprintf(cmd, sizeof(cmd), "freq %u", tx_freq);
