@@ -657,9 +657,9 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     if (r.tx_freq) last_tx_freq = r.tx_freq;
 
     // During RX, follow the spectrum LO continuously.
-    // During TX, skip — hardware freq was set in hpsdr_tr_idle and must
-    // not be overridden back to the RX LO on every EP2 packet.
-    if (!remote_mox)
+    // During TX (either remote MOX or physical key), skip — must not override
+    // the TX VFO back to the RX LO on every EP2 packet.
+    if (!remote_mox && !in_tx)
       apply_freq_from_ep2(last_rx_freq);
     apply_mox_from_ep2(r.mox);
 
@@ -807,7 +807,8 @@ static gboolean hpsdr_watchdog(gpointer data) {
   // Detect physical key/PTT press: in_tx transitioned to 1 without us
   // initiating it via MOX.  Correct the frequency to the SDR app's selected
   // signal now that we're on the GTK main thread where cmd_exec is safe.
-  if (client_active && in_tx && !last_in_tx) {
+  if (client_active && in_tx && !last_in_tx && !remote_mox) {
+    // physical key/PTT only — MOX path already set freq in hpsdr_tr_idle
     uint32_t tx_freq = last_tx_freq ? last_tx_freq : last_rx_freq;
     if (tx_freq) {
       char cmd[50];
