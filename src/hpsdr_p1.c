@@ -814,8 +814,7 @@ static gboolean hpsdr_watchdog(gpointer data) {
     if (tx_freq) {
       char cmd[50];
       snprintf(cmd, sizeof(cmd), "freq %u", tx_freq);
-      //printf("hpsdr watchdog: TX detected, last_rx_freq=%u last_tx_freq=%u\n",
-            last_rx_freq, last_tx_freq);
+      //printf("hpsdr watchdog: TX detected, last_rx_freq=%u last_tx_freq=%u\n", last_rx_freq, last_tx_freq);
       cmd_exec(cmd);
       printf("hpsdr watchdog: PTT detected, corrected TX freq to %u Hz\n", tx_freq);
     }
