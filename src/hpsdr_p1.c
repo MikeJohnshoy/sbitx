@@ -766,7 +766,7 @@ static gboolean hpsdr_tr_idle(gpointer data) {
     // For SPARK SDR the selected signal is always the spectrum center so
     // last_tx_freq == last_rx_freq; fall back to last_rx_freq if addr 0x01
     // was never received.
-    uint32_t tx_freq = last_tx_freq ? last_tx_freq : last_rx_freq;
+    uint32_t tx_freq = last_rx_freq;
     if (tx_freq) {
       char cmd[50];
       snprintf(cmd, sizeof(cmd), "freq %u", tx_freq);
@@ -814,7 +814,7 @@ static gboolean hpsdr_watchdog(gpointer data) {
   // initiating it via MOX.  Correct the frequency to the SDR app's selected
   // signal now that we're on the GTK main thread where cmd_exec is safe.
   if (client_active && in_tx && !last_in_tx && !remote_mox) {
-    uint32_t tx_freq = last_tx_freq ? last_tx_freq : last_rx_freq;
+    uint32_t tx_freq = last_rx_freq;
     if (tx_freq) {
       char cmd[50];
       snprintf(cmd, sizeof(cmd), "freq %u", tx_freq);
