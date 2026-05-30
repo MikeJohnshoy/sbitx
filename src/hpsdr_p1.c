@@ -655,11 +655,6 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     // addr 0x02 is zero in 18 of every 19 frames.
     if (r.freq) last_rx_freq = r.freq;
 
-    // The operator's selected signal is always last_rx_freq — this is "RX 1"
-    // in SDR Console and the spectrum centre in SPARK SDR.  We follow this
-    // frequency whether in RX or TX (simplex operation).
-    if (r.freq)    last_rx_freq = r.freq;
-    
     // During RX, follow the spectrum LO continuously.
     // During TX, skip — hardware freq was set in hpsdr_tr_idle and must
     // not be overridden back to the RX LO on every EP2 packet.
@@ -787,7 +782,7 @@ static gboolean hpsdr_tr_idle(gpointer data) {
 //
 // The poll thread runs hpsdr_poll_thread() which blocks on recvfrom() and
 // dispatches every inbound packet through handle_command() (Section 3).
-// The watchdog fires every 250 ms on the GTK main thread and forces a return
+// The watchdog fires every 50 ms on the GTK main thread and forces a return
 // to RX if no EP2 has been received for EP2_WATCHDOG_MS while in TX — covering
 // crash, network drop, or any other unclean disconnect.
 
@@ -809,7 +804,7 @@ static gboolean hpsdr_watchdog(gpointer data) {
   // Detect physical key/PTT press: in_tx transitioned to 1 without us
   // initiating it via MOX.  Correct the frequency to the SDR app's selected
   // signal now that we're on the GTK main thread where cmd_exec is safe.
-  if (client_active && in_tx && !last_in_tx && !remote_mox) {
+  if (client_active && in_tx && !last_in_tx) {
     uint32_t tx_freq = last_rx_freq;
     if (tx_freq) {
       char cmd[50];
@@ -902,7 +897,7 @@ int hpsdr_is_connected(void) {
 void hpsdr_poll(void) {
   if (!poll_thread_started && running) {
     pthread_create(&poll_thread, NULL, hpsdr_poll_thread, NULL);
-    g_timeout_add(250, hpsdr_watchdog, NULL);
+    g_timeout_add(50, hpsdr_watchdog, NULL);  // 50 ms timer
     poll_thread_started = 1;
   }
 }
