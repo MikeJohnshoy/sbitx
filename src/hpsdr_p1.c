@@ -8,8 +8,8 @@
 // Data flow:
 //   RX (sBitx → SDR app):  audio thread → hpsdr_send_iq() → [96k→48k decimation]
 //                           → iq_buf → build_and_send_packet() → UDP/EP6 → SDR app
-//   TX (SDR app → sBitx):  UDP/EP2 → hpsdr_unpack_ep2() → [48k→96k upsampling]
-//                           → tx_iq_ring → hpsdr_get_tx_iq() → audio thread
+//   TX (SDR app → sBitx):  UDP/EP2 → hpsdr_unpack_ep2() → handle_command() → tx_upsample_and_push()
+//                           → [48k→96k upsampling] → tx_iq_ring → hpsdr_get_tx_iq() → audio thread
 //
 // Major sections:
 //  1. RX Signal Processing:  96k→48k half-band decimation, EP6 frame staging
@@ -86,7 +86,6 @@ static void    *hpsdr_poll_thread(void *arg);
 extern void remote_execute(char *command);
 extern int  freq_hdr;
 extern int  in_tx;
-extern void tr_switch(int tx_on);
 extern void tx_on(int trigger);
 extern void tx_off(void);
 extern void cmd_exec(char *cmd);
@@ -334,7 +333,7 @@ static void tx_upsample_and_push(double i_val, double q_val) {
   if ((uint32_t)(wr - rd) >= (TX_IQ_RING_SIZE - 4))
     return;
 
-  // Write midpoint first, then aligned original (chronological order)
+  // Write midpoint first, then aligned original
   tx_iq_ring_i[wr & TX_IQ_RING_MASK] = mid_i;
   tx_iq_ring_q[wr & TX_IQ_RING_MASK] = mid_q;
   wr++;
@@ -388,9 +387,6 @@ int hpsdr_get_tx_iq(double *out_i, double *out_q, int max_samples) {
 // Function order within this section:
 //   classify → inbound handlers (discovery, EP2 unpack) →
 //   outbound builder (EP6) → session reset → top-level dispatcher
-//
-// Note: build_and_send_packet() is triggered by the RX signal path (Section 1)
-// when iq_buf is full — it is not called directly from handle_command().
 
 // EP6 sequence counter — incremented with every outbound packet
 static uint32_t tx_seq = 0;
@@ -412,7 +408,7 @@ static int hpsdr_classify(const uint8_t *buf, int len) {
 // in_use is set when a session is already active with a different client,
 // signalling to the requester that the radio is busy.
 static void hpsdr_build_discovery_reply(uint8_t *reply, int in_use) {
-  memset(reply, 0, HPSDR_DISCOVERY_REPLY);
+  memset(reply, 0, HPSDR_DISCOVERY_REPLY);  // HPSDR_DISCOVERY_REPLY currently defined as 60
   reply[0] = 0xEF;
   reply[1] = 0xFE;
   reply[2] = 0x02;
@@ -457,7 +453,7 @@ static int hpsdr_unpack_ep2(const uint8_t *buf, int len, hpsdr_ep2_result_t *res
     // OR the MOX bit across both frames (Section 5.5)
     result->mox |= mox;
 
-    // 19-slot round-robin C&C decode (Section 5.4)
+    // 19 standard slots decoded; HL2 extension slots listed but not used
     switch (addr) {
       case 0x00: { // General Settings: sample rate in C1 bits 1:0
         uint8_t rate_bits = ptr[4] & 0x03;
@@ -807,6 +803,7 @@ static gboolean hpsdr_watchdog(gpointer data) {
     return G_SOURCE_REMOVE;
 
   // the 'tr_switch' for keying the sbitx while connected to a SDR app
+  // using cmd_exec and tx_on
   // Detect physical key/PTT press: in_tx transitioned to 1 without us
   // initiating it via MOX.  Correct the frequency to the SDR app's selected
   // signal now that we're on the GTK main thread where cmd_exec is safe.
