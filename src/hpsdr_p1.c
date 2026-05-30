@@ -469,12 +469,12 @@ static int hpsdr_unpack_ep2(const uint8_t *buf, int len, hpsdr_ep2_result_t *res
       case 0x01: // TX VFO frequency
         result->tx_freq = ((uint32_t)ptr[4] << 24) | ((uint32_t)ptr[5] << 16) |
                           ((uint32_t)ptr[6] <<  8) |  (uint32_t)ptr[7];
-        printf("hpsdr EP2 addr 0x01 tx_freq = %u\n", result->tx_freq);
+        //printf("hpsdr EP2 addr 0x01 tx_freq = %u\n", result->tx_freq);
         break;
       case 0x02: // RX1 (DDC0) frequency
         result->freq    = ((uint32_t)ptr[4] << 24) | ((uint32_t)ptr[5] << 16) |
                           ((uint32_t)ptr[6] <<  8) |  (uint32_t)ptr[7];
-        printf("hpsdr EP2 addr 0x02 freq    = %u\n", result->freq);
+        //printf("hpsdr EP2 addr 0x02 freq    = %u\n", result->freq);
         break;
       case 0x03: // RX2 (DDC1) frequency — not used
       case 0x0E: // ADC assignments & TX step attenuator — not used
@@ -692,7 +692,7 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
 // differs from the current sBitx tuned frequency.
 static void apply_freq_from_ep2(uint32_t freq) {
   if (freq > 0 && freq != (uint32_t)freq_hdr) {
-    printf("hpsdr: remote set freq %u Hz\n", freq);
+    //printf("hpsdr: remote set freq %u Hz\n", freq);
     char cmd[50];
     snprintf(cmd, sizeof(cmd), "freq %u", freq);
     remote_execute(cmd);
@@ -725,7 +725,7 @@ static void apply_mox_from_ep2(int mox) {
         // Tune to operator's selected signal before the T/R switch fires
         //if (last_rx_freq) apply_freq_from_ep2(last_rx_freq);
         hpsdr_tx_data_active = 1;
-        printf("hpsdr: MOX ON (debounced)\n");
+        //printf("hpsdr: MOX ON (debounced)\n");
         if (tr_pending != 1) {
           tr_pending = 1;
           g_idle_add(hpsdr_tr_idle, NULL);
@@ -735,7 +735,7 @@ static void apply_mox_from_ep2(int mox) {
         flush_tx_ring();
         // Restore the RX spectrum centre VFO when returning to receive
         if (last_rx_freq) apply_freq_from_ep2(last_rx_freq);
-        printf("hpsdr: MOX OFF (debounced)\n");
+        //printf("hpsdr: MOX OFF (debounced)\n");
         if (tr_pending != 2) {
           tr_pending = 2;
           g_idle_add(hpsdr_tr_idle, NULL);
@@ -763,17 +763,17 @@ static gboolean hpsdr_tr_idle(gpointer data) {
     // last_tx_freq == last_rx_freq; fall back to last_rx_freq if addr 0x01
     // was never received.
     uint32_t tx_freq = last_tx_freq ? last_tx_freq : last_rx_freq;
-    printf("hpsdr_tr_idle: last_rx_freq=%u freq_hdr=%d\n", last_rx_freq, freq_hdr);
+    //printf("hpsdr_tr_idle: last_rx_freq=%u freq_hdr=%d\n", last_rx_freq, freq_hdr);
     if (tx_freq) {
       char cmd[50];
       snprintf(cmd, sizeof(cmd), "freq %u", tx_freq);
       cmd_exec(cmd);
-      printf("hpsdr_tr_idle: set TX freq to %u Hz\n", tx_freq);
+      //printf("hpsdr_tr_idle: set TX freq to %u Hz\n", tx_freq);
     }
-    printf("hpsdr_tr_idle: switching to TX\n");
+    //printf("hpsdr_tr_idle: switching to TX\n");
     tx_on(TX_SOFT);
   } else if (action == 2) {
-    printf("hpsdr_tr_idle: switching to RX (in_tx=%d)\n", in_tx);
+    //printf("hpsdr_tr_idle: switching to RX (in_tx=%d)\n", in_tx);
     tx_off();
   }
   return G_SOURCE_REMOVE;
@@ -815,10 +815,9 @@ static gboolean hpsdr_watchdog(gpointer data) {
     if (tx_freq) {
       char cmd[50];
       snprintf(cmd, sizeof(cmd), "freq %u", tx_freq);
-      printf("hpsdr watchdog: TX detected, last_rx_freq=%u freq_hdr=%d remote_mox=%d\n",
-           last_rx_freq, freq_hdr, remote_mox);
+      //printf("hpsdr watchdog: TX detected, last_rx_freq=%u freq_hdr=%d remote_mox=%d\n", last_rx_freq, freq_hdr, remote_mox);
       cmd_exec(cmd);
-      printf("hpsdr watchdog: PTT detected, corrected TX freq to %u Hz\n", tx_freq);
+      //printf("hpsdr watchdog: PTT detected, corrected TX freq to %u Hz\n", tx_freq);
     }
   }
   last_in_tx = in_tx;
