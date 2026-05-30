@@ -466,12 +466,12 @@ static int hpsdr_unpack_ep2(const uint8_t *buf, int len, hpsdr_ep2_result_t *res
       case 0x01: // TX VFO frequency
         result->tx_freq = ((uint32_t)ptr[4] << 24) | ((uint32_t)ptr[5] << 16) |
                           ((uint32_t)ptr[6] <<  8) |  (uint32_t)ptr[7];
-        //printf("hpsdr EP2 addr 0x01 tx_freq = %u\n", result->tx_freq);
+        printf("hpsdr EP2 addr 0x01 tx_freq = %u\n", result->tx_freq);
         break;
       case 0x02: // RX1 (DDC0) frequency
         result->freq    = ((uint32_t)ptr[4] << 24) | ((uint32_t)ptr[5] << 16) |
                           ((uint32_t)ptr[6] <<  8) |  (uint32_t)ptr[7];
-        //printf("hpsdr EP2 addr 0x02 freq    = %u\n", result->freq);
+        printf("hpsdr EP2 addr 0x02 freq    = %u\n", result->freq);
         break;
       case 0x03: // RX2 (DDC1) frequency — not used
       case 0x0E: // ADC assignments & TX step attenuator — not used
@@ -758,6 +758,7 @@ static gboolean hpsdr_tr_idle(gpointer data) {
     // last_tx_freq == last_rx_freq; fall back to last_rx_freq if addr 0x01
     // was never received.
     uint32_t tx_freq = last_rx_freq;
+    printf("hpsdr_tr_idle: last_rx_freq=%u freq_hdr=%d\n", last_rx_freq, freq_hdr);
     if (tx_freq) {
       char cmd[50];
       snprintf(cmd, sizeof(cmd), "freq %u", tx_freq);
@@ -809,7 +810,8 @@ static gboolean hpsdr_watchdog(gpointer data) {
     if (tx_freq) {
       char cmd[50];
       snprintf(cmd, sizeof(cmd), "freq %u", tx_freq);
-      //printf("hpsdr watchdog: TX detected, last_rx_freq=%u last_tx_freq=%u\n", last_rx_freq, last_tx_freq);
+      printf("hpsdr watchdog: TX detected, last_rx_freq=%u freq_hdr=%d remote_mox=%d\n",
+           last_rx_freq, freq_hdr, remote_mox);
       cmd_exec(cmd);
       printf("hpsdr watchdog: PTT detected, corrected TX freq to %u Hz\n", tx_freq);
     }
