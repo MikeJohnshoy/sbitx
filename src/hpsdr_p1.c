@@ -129,8 +129,6 @@ static volatile int           hpsdr_tx_data_active = 0;
 // signal frequency in both SDR Console (shown as "RX 1") and SPARK SDR
 // (always at spectrum center).
 static uint32_t last_rx_freq = 0;
-// Last non-zero TX VFO frequency seen in EP2 addr 0x01.
-static uint32_t last_tx_freq = 0;
 
 // -----------------------------------------------------------------------------
 // Shared utility
@@ -468,12 +466,12 @@ static int hpsdr_unpack_ep2(const uint8_t *buf, int len, hpsdr_ep2_result_t *res
       case 0x01: // TX VFO frequency
         result->tx_freq = ((uint32_t)ptr[4] << 24) | ((uint32_t)ptr[5] << 16) |
                           ((uint32_t)ptr[6] <<  8) |  (uint32_t)ptr[7];
-        printf("hpsdr EP2 addr 0x01 tx_freq = %u\n", result->tx_freq);
+        //printf("hpsdr EP2 addr 0x01 tx_freq = %u\n", result->tx_freq);
         break;
       case 0x02: // RX1 (DDC0) frequency
         result->freq    = ((uint32_t)ptr[4] << 24) | ((uint32_t)ptr[5] << 16) |
                           ((uint32_t)ptr[6] <<  8) |  (uint32_t)ptr[7];
-        printf("hpsdr EP2 addr 0x02 freq    = %u\n", result->freq);
+        //printf("hpsdr EP2 addr 0x02 freq    = %u\n", result->freq);
         break;
       case 0x03: // RX2 (DDC1) frequency — not used
       case 0x0E: // ADC assignments & TX step attenuator — not used
@@ -628,7 +626,6 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     hpsdr_sample_rate = 48000; // reset to default; client will re-negotiate
     reset_all_tx_state();
     last_rx_freq = 0;
-    last_tx_freq = 0;
     client_active = 1;
     printf("hpsdr: streaming STARTED to %s:%d\n",
            inet_ntoa(stream_dest.sin_addr), ntohs(stream_dest.sin_port));
@@ -657,15 +654,12 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     // Persist the RX1 frequency across the 19-slot round-robin gap.
     // addr 0x02 is zero in 18 of every 19 frames.
     if (r.freq) last_rx_freq = r.freq;
-    // persist tx_freq too
-    if (r.tx_freq) last_tx_freq = r.tx_freq;
 
     // The operator's selected signal is always last_rx_freq — this is "RX 1"
     // in SDR Console and the spectrum centre in SPARK SDR.  We follow this
     // frequency whether in RX or TX (simplex operation).
     if (r.freq)    last_rx_freq = r.freq;
-    if (r.tx_freq) last_tx_freq = r.tx_freq;
-
+    
     // During RX, follow the spectrum LO continuously.
     // During TX, skip — hardware freq was set in hpsdr_tr_idle and must
     // not be overridden back to the RX LO on every EP2 packet.
@@ -820,7 +814,7 @@ static gboolean hpsdr_watchdog(gpointer data) {
     if (tx_freq) {
       char cmd[50];
       snprintf(cmd, sizeof(cmd), "freq %u", tx_freq);
-      printf("hpsdr watchdog: TX detected, last_rx_freq=%u last_tx_freq=%u\n",
+      //printf("hpsdr watchdog: TX detected, last_rx_freq=%u last_tx_freq=%u\n",
             last_rx_freq, last_tx_freq);
       cmd_exec(cmd);
       printf("hpsdr watchdog: PTT detected, corrected TX freq to %u Hz\n", tx_freq);
@@ -831,7 +825,7 @@ static gboolean hpsdr_watchdog(gpointer data) {
   // Existing watchdog: force RX if EP2 goes silent while in TX
   if (client_active && remote_mox && in_tx &&
       (millis_now() - ep2_last_time_ms > EP2_WATCHDOG_MS)) {
-    printf("hpsdr watchdog: no EP2 for >%dms — forcing RX\n", EP2_WATCHDOG_MS);
+    //printf("hpsdr watchdog: no EP2 for >%dms — forcing RX\n", EP2_WATCHDOG_MS);
     reset_all_tx_state();
     tx_off();
   }
