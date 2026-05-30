@@ -804,9 +804,29 @@ static int       poll_thread_started = 0;
 
 static gboolean hpsdr_watchdog(gpointer data) {
   (void)data;
+  static int last_in_tx = 0;
+
   if (!running)
     return G_SOURCE_REMOVE;
-  if (client_active && remote_mox && in_tx && (millis_now() - ep2_last_time_ms > EP2_WATCHDOG_MS)) {
+
+  // the 'tr_switch' for keying the sbitx while connected to a SDR app
+  // Detect physical key/PTT press: in_tx transitioned to 1 without us
+  // initiating it via MOX.  Correct the frequency to the SDR app's selected
+  // signal now that we're on the GTK main thread where cmd_exec is safe.
+  if (client_active && in_tx && !last_in_tx && !remote_mox) {
+    uint32_t tx_freq = last_tx_freq ? last_tx_freq : last_rx_freq;
+    if (tx_freq) {
+      char cmd[50];
+      snprintf(cmd, sizeof(cmd), "freq %u", tx_freq);
+      cmd_exec(cmd);
+      printf("hpsdr watchdog: PTT detected, corrected TX freq to %u Hz\n", tx_freq);
+    }
+  }
+  last_in_tx = in_tx;
+
+  // Existing watchdog: force RX if EP2 goes silent while in TX
+  if (client_active && remote_mox && in_tx &&
+      (millis_now() - ep2_last_time_ms > EP2_WATCHDOG_MS)) {
     printf("hpsdr watchdog: no EP2 for >%dms — forcing RX\n", EP2_WATCHDOG_MS);
     reset_all_tx_state();
     tx_off();
