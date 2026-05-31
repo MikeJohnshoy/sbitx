@@ -507,9 +507,9 @@ static int hpsdr_unpack_ep2(const uint8_t *buf, int len, hpsdr_ep2_result_t *res
 }
 
 // Build and send one 1032-byte EP6 packet (sBitx → SDR app).
-// Contains two USB frames of 63 IQ sample pairs (24-bit big-endian) drawn
-// from iq_buf, plus C&C bytes reporting current sBitx state via a 5-slot
-// round-robin (Section 4.3).
+// Contains two 512-byte Protocol 1 frames of 63 IQ sample pairs (24-bit
+// big-endian) drawn from iq_buf, plus C&C bytes reporting current sBitx
+// state via a 5-slot round-robin (Section 4.3).
 // Called from rx_filter_and_decimate() / hpsdr_send_iq() when iq_buf is full.
 static void build_and_send_packet(void) {
   uint8_t pkt[HPSDR_PKT_SIZE];
@@ -524,12 +524,32 @@ static void build_and_send_packet(void) {
 
   uint32_t seq_for_cc = tx_seq++;
 
+  // T/R transition detection: when in_tx changes, force C&C slot 0 for both
+  // frames of this packet so the SDR app receives a fresh status report
+  // (PTT confirmed, ADC overload, firmware version) immediately — rather than
+  // waiting up to 5 packets for the round-robin to cycle back to slot 0.
+  // Adapted from the Metis out_control_idx jump on XmitBit change.
+  static int last_in_tx_cc = -1;  // -1 = uninitialized (first packet)
+  static int force_slot0   =  0;  // frames remaining to hold at slot 0
+
+  if (in_tx != last_in_tx_cc) {
+    force_slot0      = 2;         // both frames in this one packet
+    last_in_tx_cc    = in_tx;
+  }
+
   for (int frame = 0; frame < 2; frame++) {
     uint8_t *fp = pkt + 8 + frame * 512;
     fp[0] = 0x7F; fp[1] = 0x7F; fp[2] = 0x7F; // USB sync
 
-    // 5-slot C&C round-robin: advance one slot per frame sent
-    int cc_addr = (seq_for_cc * 2 + frame) % 5;
+    // Normal: advance one C&C slot per frame sent.
+    // On T/R transition: hold at slot 0 for both frames of this packet.
+    int cc_addr;
+    if (force_slot0 > 0) {
+      cc_addr = 0;
+      force_slot0--;
+    } else {
+      cc_addr = (seq_for_cc * 2 + frame) % 5;
+    }
 
     // C0: slot index in bits 7:3, current PTT/MOX state in bit 0
     fp[3] = (cc_addr << 3) | (in_tx ? 1 : 0);
@@ -647,6 +667,14 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
   case PKT_EP2: {
     if (!client_active) break;
     ep2_last_time_ms = millis_now();
+
+    // check for packet loss and print to console
+    static uint32_t last_ep2_seq = 0;
+    uint32_t ep2_seq = ((uint32_t)buf[4] << 24) | ((uint32_t)buf[5] << 16) |
+                       ((uint32_t)buf[6] <<  8) |  (uint32_t)buf[7];
+    if (ep2_seq != last_ep2_seq + 1 && last_ep2_seq != 0)
+      printf("hpsdr: missing packet: expected %u got %u\n", last_ep2_seq + 1, ep2_seq);
+    last_ep2_seq = ep2_seq;
 
     hpsdr_ep2_result_t r;
     hpsdr_unpack_ep2(buf, len, &r);
