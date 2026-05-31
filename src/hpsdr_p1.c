@@ -791,22 +791,16 @@ static gboolean hpsdr_tr_idle(gpointer data) {
   tr_pending = 0;
 
   if (action == 1 && !in_tx) {
-    // addr 0x01 = operator's selected signal ("RX 1" in SDR Console).
-    // For SPARK SDR the selected signal is always the spectrum center so
-    // last_tx_freq == last_rx_freq; fall back to last_rx_freq if addr 0x01
-    // was never received.
     uint32_t tx_freq = last_tx_freq ? last_tx_freq : last_rx_freq;
-    //printf("hpsdr_tr_idle: last_rx_freq=%u freq_hdr=%d\n", last_rx_freq, freq_hdr);
     if (tx_freq) {
-      char cmd[50];
-      snprintf(cmd, sizeof(cmd), "freq %u", tx_freq);
-      cmd_exec(cmd);
-      //printf("hpsdr_tr_idle: set TX freq to %u Hz\n", tx_freq);
+      // Update the freq field so tx_on()'s internal set_operating_freq()
+      // picks it up — avoids a double I2C hit that triggers arbitration_lost.
+      char freq_str[20];
+      snprintf(freq_str, sizeof(freq_str), "%u", tx_freq);
+      set_field("r1:freq", freq_str);
     }
-    //printf("hpsdr_tr_idle: switching to TX\n");
-    tx_on(TX_SOFT);
+    tx_on(TX_SOFT);   // set_operating_freq() inside here now does the single I2C write
   } else if (action == 2) {
-    //printf("hpsdr_tr_idle: switching to RX (in_tx=%d)\n", in_tx);
     tx_off();
   }
   return G_SOURCE_REMOVE;
