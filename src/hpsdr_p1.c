@@ -89,6 +89,7 @@ extern int  in_tx;
 extern void tx_on(int trigger);
 extern void tx_off(void);
 extern void cmd_exec(char *cmd);
+extern int  set_field(const char *id, const char *value);
 
 // -----------------------------------------------------------------------------
 // Shared statics — variables accessed by two or more sections
