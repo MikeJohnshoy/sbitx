@@ -794,13 +794,15 @@ static gboolean hpsdr_tr_idle(gpointer data) {
   if (action == 1 && !in_tx) {
     uint32_t tx_freq = last_tx_freq ? last_tx_freq : last_rx_freq;
     if (tx_freq) {
-      // Update the freq field so tx_on()'s internal set_operating_freq()
-      // picks it up — avoids a double I2C hit that triggers arbitration_lost.
       char freq_str[20];
       snprintf(freq_str, sizeof(freq_str), "%u", tx_freq);
       set_field("r1:freq", freq_str);
+      // Give the Si5351 I2C transaction time to complete before
+      // tr_switch() toggles TX_LINE and triggers another write.
+      // Without this, back-to-back GPIO transitions cause NACK retries.
+      usleep(5000);  // 5 ms — well within SSB T/R latency budget
     }
-    tx_on(TX_SOFT);   // set_operating_freq() inside here now does the single I2C write
+    tx_on(TX_SOFT);
   } else if (action == 2) {
     tx_off();
   }
