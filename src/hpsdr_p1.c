@@ -669,12 +669,21 @@ static void handle_command(uint8_t *buf, int len, struct sockaddr_in *sender) {
     ep2_last_time_ms = millis_now();
 
     // check for packet loss and print to console
-    static uint32_t last_ep2_seq = 0;
+    static uint32_t ep2_seq_high = 0;
+    static int      ep2_seq_init = 0;
     uint32_t ep2_seq = ((uint32_t)buf[4] << 24) | ((uint32_t)buf[5] << 16) |
                        ((uint32_t)buf[6] <<  8) |  (uint32_t)buf[7];
-    if (ep2_seq != last_ep2_seq + 1 && last_ep2_seq != 0)
-      printf("hpsdr: missing packet: expected %u got %u\n", last_ep2_seq + 1, ep2_seq);
-    last_ep2_seq = ep2_seq;
+    if (!ep2_seq_init) {
+      ep2_seq_high = ep2_seq;
+      ep2_seq_init = 1;
+    } else {
+      int32_t delta = (int32_t)(ep2_seq - ep2_seq_high);
+      if (delta > 4)
+        printf("hpsdr: dropped ~%d packets before seq %u\n", delta, ep2_seq);
+      if (delta > 0)
+        ep2_seq_high = ep2_seq;
+      // late/reordered arrivals (delta <= 0): silently accepted
+    }
 
     hpsdr_ep2_result_t r;
     hpsdr_unpack_ep2(buf, len, &r);
