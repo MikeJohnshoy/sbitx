@@ -520,7 +520,7 @@ float cw_tx_get_sample() {
   float sample = 0;
   uint8_t state_machine_mode;
   static uint8_t symbol_now = CW_IDLE;
- --
+	
 	// --- DEBUG: measure call rate
   static uint64_t dbg_call_count = 0;
   static struct timeval dbg_last_tv = {0, 0};
