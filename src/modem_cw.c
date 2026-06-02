@@ -520,7 +520,26 @@ float cw_tx_get_sample() {
   float sample = 0;
   uint8_t state_machine_mode;
   static uint8_t symbol_now = CW_IDLE;
-  
+
+	 /* --- DEBUG: measure call rate --- /
+  static uint64_t dbg_call_count = 0;
+  static struct timeval dbg_last_tv = {0, 0};
+
+  dbg_call_count++;
+  if (dbg_call_count % 96000 == 0) {   // print roughly once per second
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    if (dbg_last_tv.tv_sec != 0) {
+      double elapsed = (now.tv_sec  - dbg_last_tv.tv_sec) +
+                       (now.tv_usec - dbg_last_tv.tv_usec) / 1e6;
+      double actual_rate = 96000.0 / elapsed;
+      printf("[cw_tx_get_sample] calls in last %.3f s  =>  %.1f calls/sec  (target 96000)\n",
+             elapsed, actual_rate);
+    }
+    dbg_last_tv = now;
+  }
+  / --- END DEBUG --- */
+	
   if ((keydown_count == 0) && (keyup_count == 0)) {
     // note current time to use with UI value of CW_DELAY to control break-in
     millis_now = millis();
