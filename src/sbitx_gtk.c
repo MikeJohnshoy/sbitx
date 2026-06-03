@@ -9910,13 +9910,12 @@ void handleButton2Press()
 // - MFK encoder
 // - MFK volume lock timeout
 // - ENC1_SW dropdown / MFK unlock
-gboolean ui_tick(gpointer gook)
-{
-	// ---------------------------------------------------------------
-	// FAST PATH — runs every 1 ms tick
-	// Only time-critical work: CW key polling, tuning, PTT, remote I/O
-	// Keep this section SHORT — no I2C, no redraws, no field scans
-	// ---------------------------------------------------------------
+gboolean ui_tick(gpointer gook) {
+  // ---------------------------------------------------------------
+  // FAST PATH — runs every 1 ms tick
+  // Only time-critical work: CW key polling, tuning, PTT, remote I/O
+  // Keep this section SHORT — no I2C, no redraws, no field scans
+  // ---------------------------------------------------------------
 
 	// Process remote command queue (can affect TX state)
 	while (q_length(&q_remote_commands) > 0)
@@ -9970,7 +9969,6 @@ gboolean ui_tick(gpointer gook)
 	// ---------------------------------------------------------------
 	static int ticks = 0;
 	if (++ticks > 10000) ticks = 0;
-
 	int tick_count;  // reused by each block below — not a shared gate
 
 	// Non-CW modem poll (FT8, SSB, etc.)
@@ -10021,7 +10019,7 @@ gboolean ui_tick(gpointer gook)
 	}
 
 	// Spectrum and waterfall redraws (most expensive operations)
-	// Original: wf_spd | Recommended: keep wf_spd; honour FT8/FT4 minimum
+	// Original: wf_spd | Recommended: keep wf_spd; honor FT8/FT4 minimum
 	{
 		int wf_tick_count = wf_spd;
 		if ((current_mode == MODE_FT4 || current_mode == MODE_FT8) && wf_tick_count < 50)
@@ -10037,7 +10035,7 @@ gboolean ui_tick(gpointer gook)
 	}
 
 	// Title bar update
-	// Original: wf_spd | Recommended: 100ms (changes rarely mid-QSO)
+	// Original: wf_spd | Recommended: 100ms
 	tick_count = 100;
 	if (ticks % tick_count == 0)
 	{
@@ -10045,7 +10043,7 @@ gboolean ui_tick(gpointer gook)
 	}
 
 	// Button handlers
-	// Original: wf_spd | Recommended: 20ms (responsive without hammering)
+	// Original: wf_spd | Recommended: 20ms
 	tick_count = 20;
 	if (ticks % tick_count == 0)
 	{
