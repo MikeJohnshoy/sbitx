@@ -577,17 +577,14 @@ float cw_tx_get_sample() {
   // apply envelope for actual transmitted audio
   sample = (tone * cw_envelope) / 8;
 
-  // [change 3] TX self-decode only runs in keyboard/macro mode.
-  // For straight key, paddle, bug, and ultimatic the decoder adds ~10 ms
-  // jitter spikes every 1024 samples with no benefit -- skip it entirely.
-  if (state_machine_mode == CW_KBD) {
-    float decode_sample = 0.0f;
-    if (cw_envelope > 0.001f) decode_sample = tone / 8.0f;
-    tx_sample_buffer[tx_buffer_pos++] = (int32_t)(decode_sample * 32768.0f);
-    if (tx_buffer_pos >= 1024) {
+  // for TX decoding, use a hard-gated tone to provide decoder
+  float decode_sample = 0.0f;
+  if (cw_envelope > 0.001f) decode_sample = tone / 8.0f;  //reduce level of sampled TX signal
+  tx_sample_buffer[tx_buffer_pos++] = (int32_t)(decode_sample * 32768.0f);
+  // when buffer is full send it to TX decoder
+  if (tx_buffer_pos >= 1024) {
       cw_tx_decode_samples();
       tx_buffer_pos = 0;
-    }
   }
 
   // keep extending 'cw_tx_until' while we're sending
