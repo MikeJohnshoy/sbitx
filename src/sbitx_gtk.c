@@ -9882,407 +9882,265 @@ void handleButton2Press()
 	}
 }
 
+// ui_tick()
+// original ran everything at a fixed 20ms rate. This version separates "needs to be fast" from 
+// "can be slow", controlled by wf_spd
+// FAST path — runs every tick (every 5ms):
+// - remote commands
+// - dirty field redraws  
+// - tuning knob
+// - modem_poll (every tick for CW, every 20 ticks for other modes)
+// - encoder, PTT, ENC1_SW
+// SLOW path — runs every tick_count ticks (tick_count * 5ms):
+// - spectrum/waterfall update
+// - TX power/VSWR display
+// - title bar
+// - button handlers
+// - INA260 voltage
+// - mouse cursor
 gboolean ui_tick(gpointer gook)
 {
-	int static ticks = 0;
+	// ---------------------------------------------------------------
+	// FAST PATH — runs every 1 ms tick
+	// Only time-critical work: CW key polling, tuning, PTT, remote I/O
+	// Keep this section SHORT — no I2C, no redraws, no field scans
+	// ---------------------------------------------------------------
 
-	ticks++;
-
+	// Process remote command queue (can affect TX state)
 	while (q_length(&q_remote_commands) > 0)
 	{
-		// read each command until the
 		char remote_cmd[1000];
 		int c, i;
 		for (i = 0; i < sizeof(remote_cmd) - 2 && (c = q_read(&q_remote_commands)) > 0; i++)
-		{
 			remote_cmd[i] = c;
-		}
 		remote_cmd[i] = 0;
 
-		// echo the keystrokes for chatty modes like cw/rtty/psk31/etc
 		if (!strncmp(remote_cmd, "key ", 4))
 			for (int i = 4; remote_cmd[i] > 0; i++)
 				edit_field(get_field("#text_in"), remote_cmd[i]);
 		else
 		{
 			cmd_exec(remote_cmd);
-			settings_updated = 1; // save the settings
+			settings_updated = 1;
 		}
 	}
 
-	for (struct field *f = active_layout; f->cmd[0] > 0; f++)
-	{
-		if (f->is_dirty)
-		{
-			if (f->y >= 0)
-			{
-				GdkRectangle r;
-				r.x = f->x;
-				r.y = f->y;
-				r.width = f->width;
-				r.height = f->height;
-				invalidate_rect(r.x, r.y, r.width, r.height);
-			}
-		}
-	}
-	// char message[100];
-
-	// check the tuning knob
+	// Tuning encoder — latency-sensitive (affects VFO mid-QSO)
 	struct field *f = get_field("r1:freq");
+	while (tuning_ticks > 0) { edit_field(f, MIN_KEY_DOWN); tuning_ticks--; }
+	while (tuning_ticks < 0) { edit_field(f, MIN_KEY_UP);   tuning_ticks++; }
 
-	while (tuning_ticks > 0)
+	// CW modem poll — must run every 1 ms for responsive key/paddle feel
+	// Non-CW modes are handled in the slow path below
+	int current_mode = mode_id(get_field("r1:mode")->value);
+	if (current_mode == MODE_CW || current_mode == MODE_CWR)
+		modem_poll(current_mode);
+
+	// PTT for voice/data modes — GPIO read is cheap, keep here
+	f = get_field("r1:mode");
+	if (f && (!strcmp(f->value, "2TONE") || !strcmp(f->value, "LSB") ||
+	          !strcmp(f->value, "AM")    || !strcmp(f->value, "USB") || !strcmp(f->value, "FM")))
 	{
-		edit_field(f, MIN_KEY_DOWN);
-		tuning_ticks--;
-		// sprintf(message, "tune-\r\n");
-		// write_console(STYLE_LOG, message);
+		if (digitalRead(PTT) == LOW  && in_tx == 0)     tx_on(TX_PTT);
+		else if (digitalRead(PTT) == HIGH && in_tx == TX_PTT) tx_off();
 	}
 
-	while (tuning_ticks < 0)
-	{
-		edit_field(f, MIN_KEY_UP);
-		tuning_ticks++;
-		// sprintf(message, "tune+\r\n");
-		// write_console(STYLE_LOG, message);
-	}
-
-	// every 20 ticks call modem_poll to see if any modes need work done
-	if (ticks % 20 == 0)
-		modem_poll(mode_id(get_field("r1:mode")->value));
-	else
-	{
-		// calling modem_poll every 20 ticks isn't enough to keep up with a fast
-		// straight key, so now we go on _every_ tick in MODE_CW or MODE_CWR
-		if ((mode_id(get_field("r1:mode")->value)) == MODE_CW ||
-			(mode_id(get_field("r1:mode")->value)) == MODE_CWR)
-			modem_poll(mode_id(get_field("r1:mode")->value));
-	}
-
-	int tick_count = 100;
-
-	switch (mode_id(field_str("MODE")))
-	{
-	case MODE_CW:
-	case MODE_CWR:
-		tick_count = wf_spd; // Use wf_spd for CW and CWR modes
-		break;
-
-	case MODE_FT4:
-	case MODE_FT8:
-		if (wf_spd < 50)
-		{
-			tick_count = 50; // Ensure tick_count is at least 50 if wf_spd is too low
-		}
-		else
-		{
-			tick_count = wf_spd; // Use wf_spd as tick_count otherwise
-		}
-		break;
-
-	case MODE_AM:
-		tick_count = wf_spd; // Use wf_spd for AM mode
-		break;
-
-	default:
-		tick_count = wf_spd; // Default to wf_spd
-		break;
-	}
-
-	// Ensure tick_count is within reasonable bounds
-	if (tick_count < 1)
-	{
-		tick_count = 1; // Minimum tick_count to avoid division by zero or overly frequent updates
-	}
-	else if (tick_count > 500)
-	{
-		tick_count = 500; // Arbitrary maximum to prevent too infrequent updates
-	}
-	if (ticks >= tick_count)
-	{
-
-		char response[6], cmd[10];
-		cmd[0] = 1;
-
-		if (in_tx)
-		{
-			char buff[10];
-
-			sprintf(buff, "%d", fwdpower);
-			set_field("#fwdpower", buff);
-			sprintf(buff, "%d", vswr);
-			set_field("#vswr", buff);
-			check_and_handle_vswr(vswr);
-		}
-		if (layout_needs_refresh)
-		{
-			layout_ui();
-			layout_needs_refresh = false; // Reset the flag
-		}
-		struct field *f = get_field("spectrum");
-		update_field(f); // move this each time the spectrum watefall index is moved
-		f = get_field("waterfall");
-		update_field(f);
-
- // DEBUG CODE FOR CESSB
- /* power measurement for cessb
-        if ( in_tx != 0) {
-            if (tx_flag == 0 ) {  // initialize
-                 tx_flag=1;
-                 pw_ctr=0;
-                 pw_avg=0;
-                 pw_min=100.0;
-                 pw_max=0.0;
-             }
-        //printf(" fwdpower %.2f\n",fwdpower/10.0);
-        pw_ctr++;
-        pw_avg += fwdpower/10.0;
-        if (fwdpower/10.0 < pw_min)    pw_min = fwdpower/10.0;
-        if (fwdpower/10.0 > pw_max) pw_max = fwdpower/10.0;
-    } else {
-        if ( tx_flag == 1) {
-        pw_avg = pw_avg/pw_ctr;
-        printf("count %d: min %.2f  max %.2f  avg %.2f\n", pw_ctr, pw_min, pw_max, pw_avg);
-        }
-        tx_flag=0;
-    }
-    // END OF DEBUG CODE FOR CESSB
-*/
-		update_titlebar();
-		/*		f = get_field("#status");
-				update_field(f);
-		*/
-
-		handleDualButtonPress(); // Check for both buttons first
-		handleButton1Press(); // Call the SW1 handler -W2JON
-		handleButton2Press(); // Call the SW2 handler -W2JON
-		// if (digitalRead(ENC2_SW) == 0)
-		// oled_toggle_band();
-
-		if (record_start)
-			update_field(get_field("#record"));
-
-		// alternate character from the softkeyboard upon long press
-		if (f_focus && focus_since + 500 < millis() && !strncmp(f_focus->cmd, "#kbd_", 5) && mouse_down)
-		{
-			// emit the symbol
-			struct field *f_text = f_focus; // get_field("#text_in");
-			// replace the previous character with the shifted one
-			edit_field(f_text, MIN_KEY_BACKSPACE);
-			edit_field(f_text, f_focus->label[0]);
-			focus_since = millis();
-		}
-
-		// check if low and high settings are stepping on each other
-		char new_value[20];
-		while (atoi(get_field("r1:low")->value) > atoi(get_field("r1:high")->value))
-		{
-			sprintf(new_value, "%d", atoi(get_field("r1:high")->value) + get_field("r1:high")->step);
-			set_field("r1:high", new_value);
-		}
-
-		static char last_mouse_pointer_value[16];
-
-		int cursor_type;
-
-		if (strcmp(get_field("mouse_pointer")->value, last_mouse_pointer_value))
-		{
-			sprintf(last_mouse_pointer_value, get_field("mouse_pointer")->value);
-			if (!strcmp(last_mouse_pointer_value, "BLANK"))
-			{
-				cursor_type = GDK_BLANK_CURSOR;
-			}
-			else if (!strcmp(last_mouse_pointer_value, "RIGHT"))
-			{
-				cursor_type = GDK_RIGHT_PTR;
-			}
-			else if (!strcmp(last_mouse_pointer_value, "CROSSHAIR"))
-			{
-				cursor_type = GDK_CROSSHAIR;
-			}
-			else
-			{
-				cursor_type = GDK_LEFT_PTR;
-			}
-			GdkCursor *new_cursor;
-			new_cursor = gdk_cursor_new_for_display(gdk_display_get_default(), cursor_type);
-			gdk_window_set_cursor(gdk_get_default_root_window(), new_cursor);
-		}
-		if (has_ina260 == 1)
-		{
-			check_read_ina260_cadence(&voltage, &current);
-			// Update the VFO display to show the new voltage reading
-			update_field(get_field("r1:freq"));
-		}
-
-		ticks = 0;
-	}
-	// update_field(get_field("#text_in")); //modem might have extracted some text
-
-	// hamlib_slice();
 	remote_slice();
 	save_user_settings(0);
 
-	f = get_field("r1:mode");
-	// straight key in CW
-	if (f && (!strcmp(f->value, "2TONE") || !strcmp(f->value, "LSB") || !strcmp(f->value, "AM") || !strcmp(f->value, "USB") || !strcmp(f->value, "FM")))
+	// ---------------------------------------------------------------
+	// SLOW PATH — runs every tick_count ms (display / housekeeping)
+	// Expensive work: spectrum, waterfall, I2C, titlebar, buttons
+	// ---------------------------------------------------------------
+	static int ticks = 0;
+	ticks++;
+
+	int tick_count = wf_spd;
+	switch (current_mode)
 	{
-		if (digitalRead(PTT) == LOW && in_tx == 0)
-			tx_on(TX_PTT);
-		else if (digitalRead(PTT) == HIGH && in_tx == TX_PTT)
-			tx_off();
+		case MODE_FT4:
+		case MODE_FT8:
+			if (tick_count < 50) tick_count = 50;
+			break;
+		default:
+			break;
+	}
+	if (tick_count < 1)   tick_count = 1;
+	if (tick_count > 500) tick_count = 500;
+
+	if (ticks < tick_count)
+		return TRUE;  // nothing more to do this cycle
+
+	ticks = 0;
+
+	// Non-CW modem poll (FT8, SSB, etc. — doesn't need 1 ms cadence)
+	if (current_mode != MODE_CW && current_mode != MODE_CWR)
+		modem_poll(current_mode);
+
+	// Dirty field invalidation scan
+	for (struct field *fd = active_layout; fd->cmd[0] > 0; fd++)
+	{
+		if (fd->is_dirty && fd->y >= 0)
+			invalidate_rect(fd->x, fd->y, fd->width, fd->height);
 	}
 
+	// TX power / VSWR display
+	if (in_tx)
+	{
+		char buff[10];
+		sprintf(buff, "%d", fwdpower); set_field("#fwdpower", buff);
+		sprintf(buff, "%d", vswr);     set_field("#vswr", buff);
+		check_and_handle_vswr(vswr);
+	}
+
+	if (layout_needs_refresh)
+	{
+		layout_ui();
+		layout_needs_refresh = false;
+	}
+
+	// Spectrum and waterfall redraws (most expensive operations)
+	update_field(get_field("spectrum"));
+	update_field(get_field("waterfall"));
+
+	update_titlebar();
+
+	handleDualButtonPress();
+	handleButton1Press();
+	handleButton2Press();
+
+	if (record_start)
+		update_field(get_field("#record"));
+
+	// Soft keyboard long-press alternate character
+	if (f_focus && focus_since + 500 < millis() &&
+	    !strncmp(f_focus->cmd, "#kbd_", 5) && mouse_down)
+	{
+		edit_field(f_focus, MIN_KEY_BACKSPACE);
+		edit_field(f_focus, f_focus->label[0]);
+		focus_since = millis();
+	}
+
+	// Prevent low/high filter settings crossing
+	char new_value[20];
+	while (atoi(get_field("r1:low")->value) > atoi(get_field("r1:high")->value))
+	{
+		sprintf(new_value, "%d", atoi(get_field("r1:high")->value) + get_field("r1:high")->step);
+		set_field("r1:high", new_value);
+	}
+
+	// Mouse cursor style
+	static char last_mouse_pointer_value[16];
+	if (strcmp(get_field("mouse_pointer")->value, last_mouse_pointer_value))
+	{
+		sprintf(last_mouse_pointer_value, get_field("mouse_pointer")->value);
+		int cursor_type;
+		if      (!strcmp(last_mouse_pointer_value, "BLANK"))     cursor_type = GDK_BLANK_CURSOR;
+		else if (!strcmp(last_mouse_pointer_value, "RIGHT"))     cursor_type = GDK_RIGHT_PTR;
+		else if (!strcmp(last_mouse_pointer_value, "CROSSHAIR")) cursor_type = GDK_CROSSHAIR;
+		else                                                      cursor_type = GDK_LEFT_PTR;
+		GdkCursor *new_cursor = gdk_cursor_new_for_display(gdk_display_get_default(), cursor_type);
+		gdk_window_set_cursor(gdk_get_default_root_window(), new_cursor);
+	}
+
+	// INA260 voltage/current — I2C read, must stay out of fast path
+	if (has_ina260 == 1)
+	{
+		check_read_ina260_cadence(&voltage, &current);
+		update_field(get_field("r1:freq"));
+	}
+
+	// MFK encoder (volume/field control) — display-rate is fine
 	if (main_ui_encoders_enabled)
 	{
 		int scroll = enc_read(&enc_a);
 		if (scroll)
 		{
-			// Update the last activity timestamp
 			mfk_last_ms = sbitx_millis();
 
-			// Check if a dropdown is expanded - if so, navigate through options
 			if (f_dropdown_expanded)
 			{
-				// Count options
 				char temp[1000];
 				strcpy(temp, f_dropdown_expanded->selection);
 				int option_count = 0;
 				char *p = strtok(temp, "/");
-				while (p && option_count < 50)
-				{
-					option_count++;
-					p = strtok(NULL, "/");
-				}
+				while (p && option_count < 50) { option_count++; p = strtok(NULL, "/"); }
 
-				// Navigate through dropdown options
-				if (scroll < 0)
-				{
-					dropdown_highlighted--;
-					if (dropdown_highlighted < 0)
-						dropdown_highlighted = option_count - 1; // wrap around
-				}
-				else
-				{
-					dropdown_highlighted++;
-					if (dropdown_highlighted >= option_count)
-						dropdown_highlighted = 0; // wrap around
-				}
+				if (scroll < 0) { dropdown_highlighted--; if (dropdown_highlighted < 0) dropdown_highlighted = option_count - 1; }
+				else            { dropdown_highlighted++; if (dropdown_highlighted >= option_count) dropdown_highlighted = 0; }
 
-				// Invalidate the full expanded dropdown area to show the new highlight
 				int item_height = 40;
 				int num_columns = (f_dropdown_expanded->dropdown_columns > 1) ? f_dropdown_expanded->dropdown_columns : 1;
-				int num_rows = (option_count + num_columns - 1) / num_columns;
-				int item_width = (num_columns > 1) ? f_dropdown_expanded->width : f_dropdown_expanded->width;
-				int expanded_width = item_width * num_columns;
+				int num_rows    = (option_count + num_columns - 1) / num_columns;
+				int item_width  = f_dropdown_expanded->width;
 				int expanded_height = num_rows * item_height;
 				int invalidate_y;
-
-				// Calculate where the dropdown is positioned
 				if (f_dropdown_expanded->y + f_dropdown_expanded->height + expanded_height > screen_height)
-				{
-					// Drop up
 					invalidate_y = f_dropdown_expanded->y - expanded_height;
-				}
 				else
-				{
-					// Drop down
 					invalidate_y = f_dropdown_expanded->y + f_dropdown_expanded->height;
-				}
-				invalidate_rect(f_dropdown_expanded->x, invalidate_y, expanded_width, expanded_height);
+				invalidate_rect(f_dropdown_expanded->x, invalidate_y, item_width * num_columns, expanded_height);
 				update_field(f_dropdown_expanded);
 			}
 			else if (mfk_locked_to_volume)
 			{
-				// MFK is locked to volume control
 				mfk_adjust_volume(scroll);
 			}
 			else if (f_focus && f_focus->value_type == FIELD_DROPDOWN)
 			{
-				// Focused field is a dropdown but not expanded - open it
 				if (f_focus->fn)
-				{
-					// Simulate a click on the dropdown button to expand it
-					int click_x = f_focus->x + (f_focus->width / 2);
-					int click_y = f_focus->y + (f_focus->height / 2);
-					f_focus->fn(f_focus, NULL, GDK_BUTTON_PRESS, click_x, click_y, 1);
-				}
+					f_focus->fn(f_focus, NULL, GDK_BUTTON_PRESS,
+					            f_focus->x + f_focus->width / 2,
+					            f_focus->y + f_focus->height / 2, 1);
 			}
 			else if (f_focus)
 			{
-				// Normal MFK behavior - control focused field
-				if (scroll < 0)
-					edit_field(f_focus, MIN_KEY_DOWN);
-				else
-					edit_field(f_focus, MIN_KEY_UP);
+				edit_field(f_focus, (scroll < 0) ? MIN_KEY_DOWN : MIN_KEY_UP);
 			}
 		}
 	}
 
-	// Check if we should lock to volume due to timeout
-	if (!mfk_locked_to_volume && (sbitx_millis() - mfk_last_ms) > mfk_timeout_ms) {
-		// lock MFK to volume after inactivity AND move UI focus to the volume control
+	// MFK volume lock on inactivity
+	if (!mfk_locked_to_volume && (sbitx_millis() - mfk_last_ms) > mfk_timeout_ms)
+	{
 		mfk_locked_to_volume = 1;
 		struct field *vol_field = get_field("r1:volume");
-		// now simulate the �knob press� focus change so the green highlight updates
-		if (vol_field) {
-			focus_field(vol_field);
-		}
+		if (vol_field) focus_field(vol_field);
 	}
 
-
-	// Check ENC1_SW for unlock (edge detection)
+	// ENC1_SW dropdown selection / MFK unlock
 	int enc1_sw_now = digitalRead(ENC1_SW);
 	if (enc1_sw_now == 0 && enc1_sw_prev != 0)
 	{
-		// Falling edge detected
-		// Check if a dropdown is expanded - if so, select the highlighted option
 		if (f_dropdown_expanded)
 		{
-			// Calculate the position of the highlighted option in the dropdown
-			// Need to determine dropdown layout to find the correct click position
-
-			// Count options
 			char temp[1000];
 			strcpy(temp, f_dropdown_expanded->selection);
 			int option_count = 0;
 			char *p = strtok(temp, "/");
-			while (p && option_count < 50)
-			{
-				option_count++;
-				p = strtok(NULL, "/");
-			}
+			while (p && option_count < 50) { option_count++; p = strtok(NULL, "/"); }
 
-			// Calculate dropdown dimensions
-			int item_height = 40;
-			int num_columns = (f_dropdown_expanded->dropdown_columns > 1) ? f_dropdown_expanded->dropdown_columns : 1;
-			int num_rows = (option_count + num_columns - 1) / num_columns;
-			int item_width = f_dropdown_expanded->width;
+			int item_height     = 40;
+			int num_columns     = (f_dropdown_expanded->dropdown_columns > 1) ? f_dropdown_expanded->dropdown_columns : 1;
+			int num_rows        = (option_count + num_columns - 1) / num_columns;
+			int item_width      = f_dropdown_expanded->width;
 			int expanded_height = num_rows * item_height;
 			int dropdown_start_y;
-
-			// Determine if dropdown is above or below button
 			if (f_dropdown_expanded->y + f_dropdown_expanded->height + expanded_height > screen_height)
 				dropdown_start_y = f_dropdown_expanded->y - expanded_height;
 			else
 				dropdown_start_y = f_dropdown_expanded->y + f_dropdown_expanded->height;
 
-			// Calculate position of highlighted option in grid
-			int row = dropdown_highlighted / num_columns;
-			int col = dropdown_highlighted % num_columns;
+			int row     = dropdown_highlighted / num_columns;
+			int col     = dropdown_highlighted % num_columns;
+			int click_x = f_dropdown_expanded->x + col * item_width + item_width / 2;
+			int click_y = dropdown_start_y + row * item_height + item_height / 2;
 
-			// Calculate click coordinates in the center of the highlighted option
-			int click_x = f_dropdown_expanded->x + (col * item_width) + (item_width / 2);
-			int click_y = dropdown_start_y + (row * item_height) + (item_height / 2);
-
-			// Call the field's handler to process the selection
 			if (f_dropdown_expanded->fn)
-			{
 				f_dropdown_expanded->fn(f_dropdown_expanded, NULL, GDK_BUTTON_PRESS, click_x, click_y, 1);
-			}
 		}
 		else
 		{
-			// No dropdown expanded - unlock MFK
 			mfk_locked_to_volume = 0;
 			mfk_last_ms = sbitx_millis();
 		}
@@ -10291,7 +10149,7 @@ gboolean ui_tick(gpointer gook)
 
 	return TRUE;
 }
-
+			
 // Apply ui_scale to all font heights in font_table.
 static void apply_ui_scale(void)
 {
