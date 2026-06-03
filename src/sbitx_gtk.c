@@ -9883,21 +9883,33 @@ void handleButton2Press()
 }
 
 // ui_tick()
-// original ran everything at a fixed 20ms rate. This version separates "needs to be fast" from 
-// "can be slow", controlled by wf_spd
-// FAST path — runs every tick (every 5ms):
+// Original ran everything at a fixed 20ms rate, then it was modified to improve service 
+// for cw functions.  This version separates "needs to be fast" (which run every tick) and
+// "can be slow" which are then individually controlled  by setting value of "tick_count' 
+// for each function.
+// The big win is getting heavy functions onto a slower path!
+// FAST path — runs with every tick
 // - remote commands
 // - dirty field redraws  
 // - tuning knob
 // - modem_poll (every tick for CW, every 20 ticks for other modes)
 // - encoder, PTT, ENC1_SW
-// SLOW path — runs every tick_count ticks (tick_count * 5ms):
-// - spectrum/waterfall update
+// SLOW path — each block has its own tick_count (tick_count * 1ms):
+// - modem poll for non-CW modes
+// - dirty field invalidation scan
 // - TX power/VSWR display
+// - layout refresh
+// - spectrum/waterfall update
 // - title bar
 // - button handlers
-// - INA260 voltage
+// - record indicator
+// - soft keyboard long-press
+// - filter crossover guard
 // - mouse cursor
+// - INA260 voltage
+// - MFK encoder
+// - MFK volume lock timeout
+// - ENC1_SW dropdown / MFK unlock
 gboolean ui_tick(gpointer gook)
 {
 	// ---------------------------------------------------------------
@@ -9949,115 +9961,242 @@ gboolean ui_tick(gpointer gook)
 	save_user_settings(0);
 
 	// ---------------------------------------------------------------
-	// SLOW PATH — runs every tick_count ms (display / housekeeping)
-	// Expensive work: spectrum, waterfall, I2C, titlebar, buttons
+	// SLOW PATH — each block sets its own tick_count (ms period).
+	// ticks increments every 1ms and wraps at 10000.
+	// Each block fires when (ticks % tick_count == 0).
+	// To change a period, edit the tick_count line at the top of
+	// that block. The comments show the original period and the
+	// recommended new period.
 	// ---------------------------------------------------------------
 	static int ticks = 0;
-	ticks++;
+	if (++ticks > 10000) ticks = 0;
 
-	int tick_count = wf_spd;
-	switch (current_mode)
+	int tick_count;  // reused by each block below — not a shared gate
+
+	// Non-CW modem poll (FT8, SSB, etc.)
+	// Original: wf_spd (typically 20ms) | Recommended: 5ms
+	tick_count = 5;
+	if (ticks % tick_count == 0)
 	{
-		case MODE_FT4:
-		case MODE_FT8:
-			if (tick_count < 50) tick_count = 50;
-			break;
-		default:
-			break;
+		if (current_mode != MODE_CW && current_mode != MODE_CWR)
+			modem_poll(current_mode);
 	}
-	if (tick_count < 1)   tick_count = 1;
-	if (tick_count > 500) tick_count = 500;
-
-	if (ticks < tick_count)
-		return TRUE;  // nothing more to do this cycle
-
-	ticks = 0;
-
-	// Non-CW modem poll (FT8, SSB, etc. — doesn't need 1 ms cadence)
-	if (current_mode != MODE_CW && current_mode != MODE_CWR)
-		modem_poll(current_mode);
 
 	// Dirty field invalidation scan
-	for (struct field *fd = active_layout; fd->cmd[0] > 0; fd++)
+	// Original: wf_spd | Recommended: 5ms (cheap flag checks + rect calls)
+	tick_count = 5;
+	if (ticks % tick_count == 0)
 	{
-		if (fd->is_dirty && fd->y >= 0)
-			invalidate_rect(fd->x, fd->y, fd->width, fd->height);
+		for (struct field *fd = active_layout; fd->cmd[0] > 0; fd++)
+		{
+			if (fd->is_dirty && fd->y >= 0)
+				invalidate_rect(fd->x, fd->y, fd->width, fd->height);
+		}
 	}
 
 	// TX power / VSWR display
-	if (in_tx)
+	// Original: wf_spd | Recommended: 20ms (fast enough for human eye)
+	tick_count = 20;
+	if (ticks % tick_count == 0)
 	{
-		char buff[10];
-		sprintf(buff, "%d", fwdpower); set_field("#fwdpower", buff);
-		sprintf(buff, "%d", vswr);     set_field("#vswr", buff);
-		check_and_handle_vswr(vswr);
+		if (in_tx)
+		{
+			char buff[10];
+			sprintf(buff, "%d", fwdpower); set_field("#fwdpower", buff);
+			sprintf(buff, "%d", vswr);     set_field("#vswr", buff);
+			check_and_handle_vswr(vswr);
+		}
 	}
 
-	if (layout_needs_refresh)
+	// Layout refresh
+	// Original: wf_spd | Recommended: 20ms (triggered by flag, usually a no-op)
+	tick_count = 20;
+	if (ticks % tick_count == 0)
 	{
-		layout_ui();
-		layout_needs_refresh = false;
+		if (layout_needs_refresh)
+		{
+			layout_ui();
+			layout_needs_refresh = false;
+		}
 	}
 
 	// Spectrum and waterfall redraws (most expensive operations)
-	update_field(get_field("spectrum"));
-	update_field(get_field("waterfall"));
-
-	update_titlebar();
-
-	handleDualButtonPress();
-	handleButton1Press();
-	handleButton2Press();
-
-	if (record_start)
-		update_field(get_field("#record"));
-
-	// Soft keyboard long-press alternate character
-	if (f_focus && focus_since + 500 < millis() &&
-	    !strncmp(f_focus->cmd, "#kbd_", 5) && mouse_down)
+	// Original: wf_spd | Recommended: keep wf_spd; honour FT8/FT4 minimum
 	{
-		edit_field(f_focus, MIN_KEY_BACKSPACE);
-		edit_field(f_focus, f_focus->label[0]);
-		focus_since = millis();
+		int wf_tick_count = wf_spd;
+		if ((current_mode == MODE_FT4 || current_mode == MODE_FT8) && wf_tick_count < 50)
+			wf_tick_count = 50;
+		if (wf_tick_count <   1) wf_tick_count =   1;
+		if (wf_tick_count > 500) wf_tick_count = 500;
+
+		if (ticks % wf_tick_count == 0)
+		{
+			update_field(get_field("spectrum"));
+			update_field(get_field("waterfall"));
+		}
 	}
 
-	// Prevent low/high filter settings crossing
-	char new_value[20];
-	while (atoi(get_field("r1:low")->value) > atoi(get_field("r1:high")->value))
+	// Title bar update
+	// Original: wf_spd | Recommended: 100ms (changes rarely mid-QSO)
+	tick_count = 100;
+	if (ticks % tick_count == 0)
 	{
-		sprintf(new_value, "%d", atoi(get_field("r1:high")->value) + get_field("r1:high")->step);
-		set_field("r1:high", new_value);
+		update_titlebar();
+	}
+
+	// Button handlers
+	// Original: wf_spd | Recommended: 20ms (responsive without hammering)
+	tick_count = 20;
+	if (ticks % tick_count == 0)
+	{
+		handleDualButtonPress();
+		handleButton1Press();
+		handleButton2Press();
+	}
+
+	// Record indicator
+	// Original: wf_spd | Recommended: 100ms (visual indicator, not time-critical)
+	tick_count = 100;
+	if (ticks % tick_count == 0)
+	{
+		if (record_start)
+			update_field(get_field("#record"));
+	}
+
+	// Soft keyboard long-press alternate character
+	// Original: wf_spd | Recommended: 20ms (500ms threshold checked inside)
+	tick_count = 20;
+	if (ticks % tick_count == 0)
+	{
+		if (f_focus && focus_since + 500 < millis() &&
+		    !strncmp(f_focus->cmd, "#kbd_", 5) && mouse_down)
+		{
+			edit_field(f_focus, MIN_KEY_BACKSPACE);
+			edit_field(f_focus, f_focus->label[0]);
+			focus_since = millis();
+		}
+	}
+
+	// Filter crossover guard (prevent low > high)
+	// Original: wf_spd | Recommended: 20ms (cheap arithmetic, just don't hammer set_field)
+	tick_count = 20;
+	if (ticks % tick_count == 0)
+	{
+		char new_value[20];
+		while (atoi(get_field("r1:low")->value) > atoi(get_field("r1:high")->value))
+		{
+			sprintf(new_value, "%d", atoi(get_field("r1:high")->value) + get_field("r1:high")->step);
+			set_field("r1:high", new_value);
+		}
 	}
 
 	// Mouse cursor style
-	static char last_mouse_pointer_value[16];
-	if (strcmp(get_field("mouse_pointer")->value, last_mouse_pointer_value))
+	// Original: wf_spd | Recommended: 200ms (only reacts to value change anyway)
+	tick_count = 200;
+	if (ticks % tick_count == 0)
 	{
-		sprintf(last_mouse_pointer_value, get_field("mouse_pointer")->value);
-		int cursor_type;
-		if      (!strcmp(last_mouse_pointer_value, "BLANK"))     cursor_type = GDK_BLANK_CURSOR;
-		else if (!strcmp(last_mouse_pointer_value, "RIGHT"))     cursor_type = GDK_RIGHT_PTR;
-		else if (!strcmp(last_mouse_pointer_value, "CROSSHAIR")) cursor_type = GDK_CROSSHAIR;
-		else                                                      cursor_type = GDK_LEFT_PTR;
-		GdkCursor *new_cursor = gdk_cursor_new_for_display(gdk_display_get_default(), cursor_type);
-		gdk_window_set_cursor(gdk_get_default_root_window(), new_cursor);
-	}
-
-	// INA260 voltage/current — I2C read, must stay out of fast path
-	if (has_ina260 == 1)
-	{
-		check_read_ina260_cadence(&voltage, &current);
-		update_field(get_field("r1:freq"));
-	}
-
-	// MFK encoder (volume/field control) — display-rate is fine
-	if (main_ui_encoders_enabled)
-	{
-		int scroll = enc_read(&enc_a);
-		if (scroll)
+		static char last_mouse_pointer_value[16];
+		if (strcmp(get_field("mouse_pointer")->value, last_mouse_pointer_value))
 		{
-			mfk_last_ms = sbitx_millis();
+			sprintf(last_mouse_pointer_value, get_field("mouse_pointer")->value);
+			int cursor_type;
+			if      (!strcmp(last_mouse_pointer_value, "BLANK"))     cursor_type = GDK_BLANK_CURSOR;
+			else if (!strcmp(last_mouse_pointer_value, "RIGHT"))     cursor_type = GDK_RIGHT_PTR;
+			else if (!strcmp(last_mouse_pointer_value, "CROSSHAIR")) cursor_type = GDK_CROSSHAIR;
+			else                                                      cursor_type = GDK_LEFT_PTR;
+			GdkCursor *new_cursor = gdk_cursor_new_for_display(gdk_display_get_default(), cursor_type);
+			gdk_window_set_cursor(gdk_get_default_root_window(), new_cursor);
+		}
+	}
 
+	// INA260 voltage/current — I2C read, must stay slow
+	// Original: wf_spd | Recommended: 500ms (I2C is expensive, readings change slowly)
+	tick_count = 500;
+	if (ticks % tick_count == 0)
+	{
+		if (has_ina260 == 1)
+		{
+			check_read_ina260_cadence(&voltage, &current);
+			update_field(get_field("r1:freq"));
+		}
+	}
+
+	// MFK encoder (volume/field control)
+	// Original: wf_spd | Recommended: 5ms (encoder feel should be snappy)
+	tick_count = 5;
+	if (ticks % tick_count == 0)
+	{
+		if (main_ui_encoders_enabled)
+		{
+			int scroll = enc_read(&enc_a);
+			if (scroll)
+			{
+				mfk_last_ms = sbitx_millis();
+
+				if (f_dropdown_expanded)
+				{
+					char temp[1000];
+					strcpy(temp, f_dropdown_expanded->selection);
+					int option_count = 0;
+					char *p = strtok(temp, "/");
+					while (p && option_count < 50) { option_count++; p = strtok(NULL, "/"); }
+
+					if (scroll < 0) { dropdown_highlighted--; if (dropdown_highlighted < 0) dropdown_highlighted = option_count - 1; }
+					else            { dropdown_highlighted++; if (dropdown_highlighted >= option_count) dropdown_highlighted = 0; }
+
+					int item_height = 40;
+					int num_columns = (f_dropdown_expanded->dropdown_columns > 1) ? f_dropdown_expanded->dropdown_columns : 1;
+					int num_rows    = (option_count + num_columns - 1) / num_columns;
+					int item_width  = f_dropdown_expanded->width;
+					int expanded_height = num_rows * item_height;
+					int invalidate_y;
+					if (f_dropdown_expanded->y + f_dropdown_expanded->height + expanded_height > screen_height)
+						invalidate_y = f_dropdown_expanded->y - expanded_height;
+					else
+						invalidate_y = f_dropdown_expanded->y + f_dropdown_expanded->height;
+					invalidate_rect(f_dropdown_expanded->x, invalidate_y, item_width * num_columns, expanded_height);
+					update_field(f_dropdown_expanded);
+				}
+				else if (mfk_locked_to_volume)
+				{
+					mfk_adjust_volume(scroll);
+				}
+				else if (f_focus && f_focus->value_type == FIELD_DROPDOWN)
+				{
+					if (f_focus->fn)
+						f_focus->fn(f_focus, NULL, GDK_BUTTON_PRESS,
+						            f_focus->x + f_focus->width / 2,
+						            f_focus->y + f_focus->height / 2, 1);
+				}
+				else if (f_focus)
+				{
+					edit_field(f_focus, (scroll < 0) ? MIN_KEY_DOWN : MIN_KEY_UP);
+				}
+			}
+		}
+	}
+
+	// MFK volume lock on inactivity
+	// Original: wf_spd | Recommended: 20ms (timeout checked inside, 20ms resolution is fine)
+	tick_count = 20;
+	if (ticks % tick_count == 0)
+	{
+		if (!mfk_locked_to_volume && (sbitx_millis() - mfk_last_ms) > mfk_timeout_ms)
+		{
+			mfk_locked_to_volume = 1;
+			struct field *vol_field = get_field("r1:volume");
+			if (vol_field) focus_field(vol_field);
+		}
+	}
+
+	// ENC1_SW dropdown selection / MFK unlock
+	// Original: wf_spd | Recommended: 5ms (button press should feel immediate)
+	tick_count = 5;
+	if (ticks % tick_count == 0)
+	{
+		int enc1_sw_now = digitalRead(ENC1_SW);
+		if (enc1_sw_now == 0 && enc1_sw_prev != 0)
+		{
 			if (f_dropdown_expanded)
 			{
 				char temp[1000];
@@ -10066,86 +10205,33 @@ gboolean ui_tick(gpointer gook)
 				char *p = strtok(temp, "/");
 				while (p && option_count < 50) { option_count++; p = strtok(NULL, "/"); }
 
-				if (scroll < 0) { dropdown_highlighted--; if (dropdown_highlighted < 0) dropdown_highlighted = option_count - 1; }
-				else            { dropdown_highlighted++; if (dropdown_highlighted >= option_count) dropdown_highlighted = 0; }
-
-				int item_height = 40;
-				int num_columns = (f_dropdown_expanded->dropdown_columns > 1) ? f_dropdown_expanded->dropdown_columns : 1;
-				int num_rows    = (option_count + num_columns - 1) / num_columns;
-				int item_width  = f_dropdown_expanded->width;
+				int item_height     = 40;
+				int num_columns     = (f_dropdown_expanded->dropdown_columns > 1) ? f_dropdown_expanded->dropdown_columns : 1;
+				int num_rows        = (option_count + num_columns - 1) / num_columns;
+				int item_width      = f_dropdown_expanded->width;
 				int expanded_height = num_rows * item_height;
-				int invalidate_y;
+				int dropdown_start_y;
 				if (f_dropdown_expanded->y + f_dropdown_expanded->height + expanded_height > screen_height)
-					invalidate_y = f_dropdown_expanded->y - expanded_height;
+					dropdown_start_y = f_dropdown_expanded->y - expanded_height;
 				else
-					invalidate_y = f_dropdown_expanded->y + f_dropdown_expanded->height;
-				invalidate_rect(f_dropdown_expanded->x, invalidate_y, item_width * num_columns, expanded_height);
-				update_field(f_dropdown_expanded);
-			}
-			else if (mfk_locked_to_volume)
-			{
-				mfk_adjust_volume(scroll);
-			}
-			else if (f_focus && f_focus->value_type == FIELD_DROPDOWN)
-			{
-				if (f_focus->fn)
-					f_focus->fn(f_focus, NULL, GDK_BUTTON_PRESS,
-					            f_focus->x + f_focus->width / 2,
-					            f_focus->y + f_focus->height / 2, 1);
-			}
-			else if (f_focus)
-			{
-				edit_field(f_focus, (scroll < 0) ? MIN_KEY_DOWN : MIN_KEY_UP);
-			}
-		}
-	}
+					dropdown_start_y = f_dropdown_expanded->y + f_dropdown_expanded->height;
 
-	// MFK volume lock on inactivity
-	if (!mfk_locked_to_volume && (sbitx_millis() - mfk_last_ms) > mfk_timeout_ms)
-	{
-		mfk_locked_to_volume = 1;
-		struct field *vol_field = get_field("r1:volume");
-		if (vol_field) focus_field(vol_field);
-	}
+				int row     = dropdown_highlighted / num_columns;
+				int col     = dropdown_highlighted % num_columns;
+				int click_x = f_dropdown_expanded->x + col * item_width + item_width / 2;
+				int click_y = dropdown_start_y + row * item_height + item_height / 2;
 
-	// ENC1_SW dropdown selection / MFK unlock
-	int enc1_sw_now = digitalRead(ENC1_SW);
-	if (enc1_sw_now == 0 && enc1_sw_prev != 0)
-	{
-		if (f_dropdown_expanded)
-		{
-			char temp[1000];
-			strcpy(temp, f_dropdown_expanded->selection);
-			int option_count = 0;
-			char *p = strtok(temp, "/");
-			while (p && option_count < 50) { option_count++; p = strtok(NULL, "/"); }
-
-			int item_height     = 40;
-			int num_columns     = (f_dropdown_expanded->dropdown_columns > 1) ? f_dropdown_expanded->dropdown_columns : 1;
-			int num_rows        = (option_count + num_columns - 1) / num_columns;
-			int item_width      = f_dropdown_expanded->width;
-			int expanded_height = num_rows * item_height;
-			int dropdown_start_y;
-			if (f_dropdown_expanded->y + f_dropdown_expanded->height + expanded_height > screen_height)
-				dropdown_start_y = f_dropdown_expanded->y - expanded_height;
+				if (f_dropdown_expanded->fn)
+					f_dropdown_expanded->fn(f_dropdown_expanded, NULL, GDK_BUTTON_PRESS, click_x, click_y, 1);
+			}
 			else
-				dropdown_start_y = f_dropdown_expanded->y + f_dropdown_expanded->height;
-
-			int row     = dropdown_highlighted / num_columns;
-			int col     = dropdown_highlighted % num_columns;
-			int click_x = f_dropdown_expanded->x + col * item_width + item_width / 2;
-			int click_y = dropdown_start_y + row * item_height + item_height / 2;
-
-			if (f_dropdown_expanded->fn)
-				f_dropdown_expanded->fn(f_dropdown_expanded, NULL, GDK_BUTTON_PRESS, click_x, click_y, 1);
+			{
+				mfk_locked_to_volume = 0;
+				mfk_last_ms = sbitx_millis();
+			}
 		}
-		else
-		{
-			mfk_locked_to_volume = 0;
-			mfk_last_ms = sbitx_millis();
-		}
+		enc1_sw_prev = enc1_sw_now;
 	}
-	enc1_sw_prev = enc1_sw_now;
 
 	return TRUE;
 }
