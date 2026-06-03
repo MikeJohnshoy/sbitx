@@ -516,35 +516,39 @@ static int cw_read_key(){
 
 // use input from macro playback, keyboard or key/paddle to key the transmitter
 // keydown and keyup times
+// use input from macro playback, keyboard or key/paddle to key the transmitter
+// keydown and keyup times
+//
+// Changes vs original:
+//   1. Removed millis() syscall -- millis_now is maintained by cw_poll()
+//   2. Removed get_pitch() per-sample -- pitch is retuned in cw_poll() via
+//      cw_tx_cached_pitch; vfo_start() only called when pitch actually changes
+//   3. TX self-decode (cw_tx_decode_samples) skipped for key/paddle modes --
+//      only runs for keyboard/macro (CW_KBD) where it's actually needed
 float cw_tx_get_sample() {
   float sample = 0;
   uint8_t state_machine_mode;
   static uint8_t symbol_now = CW_IDLE;
-  
-  if ((keydown_count == 0) && (keyup_count == 0)) {
-    // note current time to use with UI value of CW_DELAY to control break-in
-    millis_now = millis();
-    // set CW pitch if needed
-    if (cw_tone.freq_hz != get_pitch())
-      vfo_start( &cw_tone, get_pitch(), 0);
-  }
-  
+
+  // [change 1] millis_now is kept current by cw_poll(); no syscall here.
+  // [change 2] pitch retuning moved to cw_poll(); nothing to do per-sample.
+
   // check to see if input available from macro or keyboard
   if ((cw_bytes_available > 0) || (symbol_next != NULL)) {
     state_machine_mode = CW_KBD;
     cw_current_symbol = CW_IDLE;
   } else
     state_machine_mode = cw_mode;
-  
+
   // iambic modes require polling key during keydown/keyup
   // other modes only check when idle
-  if (((state_machine_mode == CW_STRAIGHT || 
+  if (((state_machine_mode == CW_STRAIGHT ||
         state_machine_mode == CW_BUG ||
-        state_machine_mode == CW_ULTIMATIC || 
-        state_machine_mode == CW_KBD) && 
+        state_machine_mode == CW_ULTIMATIC ||
+        state_machine_mode == CW_KBD) &&
         (keydown_count == 0 && keyup_count == 0))
         ||
-        (state_machine_mode == CW_IAMBIC || 
+        (state_machine_mode == CW_IAMBIC ||
         state_machine_mode == CW_IAMBICB)) {
     symbol_now = cw_read_key();
     handle_cw_state_machine(state_machine_mode, symbol_now);
@@ -552,37 +556,40 @@ float cw_tx_get_sample() {
 
   // data driven cw envelope shaping
   // key transmitter with envelope contained in cw_envelope_data[]
-  if (keydown_count > 0) {  
+  if (keydown_count > 0) {
     if (cw_envelope_pos < cw_envelope_len)
       cw_envelope = cw_envelope_data[cw_envelope_pos++];
     else
       cw_envelope = 1.0f;
     keydown_count--;
-  } 
+  }
   else if (keyup_count > 0) {
     if (cw_envelope_pos > 0) {
       cw_envelope_pos--;
       cw_envelope = cw_envelope_data[cw_envelope_pos];
-    } else 
+    } else
       cw_envelope = 0.0f;
     keyup_count--;
   }
-  
+
   // generate cw_tone sample for transmission
   float tone = vfo_read(&cw_tone) / FLOAT_SCALE;
   // apply envelope for actual transmitted audio
   sample = (tone * cw_envelope) / 8;
 
-  // for TX decoding, use a hard-gated tone to provide decoder
-  float decode_sample = 0.0f;
-  if (cw_envelope > 0.001f) decode_sample = tone / 8.0f;  //reduce level of sampled TX signal
-  tx_sample_buffer[tx_buffer_pos++] = (int32_t)(decode_sample * 32768.0f);
-  // when buffer is full send it to TX decoder
-  if (tx_buffer_pos >= 1024) {
+  // [change 3] TX self-decode only runs in keyboard/macro mode.
+  // For straight key, paddle, bug, and ultimatic the decoder adds ~10 ms
+  // jitter spikes every 1024 samples with no benefit -- skip it entirely.
+  if (state_machine_mode == CW_KBD) {
+    float decode_sample = 0.0f;
+    if (cw_envelope > 0.001f) decode_sample = tone / 8.0f;
+    tx_sample_buffer[tx_buffer_pos++] = (int32_t)(decode_sample * 32768.0f);
+    if (tx_buffer_pos >= 1024) {
       cw_tx_decode_samples();
       tx_buffer_pos = 0;
+    }
   }
-  
+
   // keep extending 'cw_tx_until' while we're sending
   if ((symbol_now == CW_DOWN) || (symbol_now == CW_DOT) ||
       (symbol_now == CW_DASH) || (symbol_now == CW_SQUEEZE) ||
@@ -2163,6 +2170,13 @@ void cw_poll(int bytes_available, int tx_is_on) {
   // TX ON if bytes are available (from macro/keyboard) or key is pressed
   // or we are in the middle of symbol (dah/dit) transmission
   millis_now = millis();
+
+  // [change 2] retune TX tone if pitch changed; cache delay for use in
+  // cw_tx_get_sample() without calling get_pitch()/get_cw_delay() per sample
+  int new_pitch = get_pitch();
+  if (new_pitch != cw_tone.freq_hz)
+    vfo_start(&cw_tone, new_pitch, 0);
+	
   if (!tx_is_on && ((cw_bytes_available > 0 && text_ready == 1) ||
         cw_key_state || (symbol_next && *symbol_next))) {
     tx_on(TX_SOFT);
