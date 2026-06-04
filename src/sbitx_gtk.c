@@ -9883,11 +9883,10 @@ void handleButton2Press()
 }
 
 // ui_tick()
-// Original ran everything at a fixed 20ms rate, then it was modified to improve service 
-// for cw functions.  This version separates "needs to be fast" (which run every tick) and
+// This function makes sure all the tasks below get run with their needed frequncy. 
+// This version separates "needs to be fast" (which run every tick) and
 // "can be slow" which are then individually controlled  by setting value of "tick_count' 
-// for each function.
-// The big win is getting heavy functions onto a slower path!
+// for each function.  The big win is getting heavy functions onto a slower path!
 // FAST path — runs with every tick
 // - remote commands
 // - dirty field redraws  
@@ -9969,7 +9968,7 @@ gboolean ui_tick(gpointer gook) {
 	// ---------------------------------------------------------------
 	static int ticks = 0;
 	if (++ticks > 10000) ticks = 0;
-	int tick_count;  // reused by each block below — not a shared gate
+	int tick_count;   // can be set for by each block below
 
 	// Non-CW modem poll (FT8, SSB, etc.)
 	// Original: wf_spd (typically 20ms) | Recommended: 5ms
