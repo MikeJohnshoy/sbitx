@@ -9885,7 +9885,7 @@ void handleButton2Press()
 // ui_tick()
 // This function makes sure all the tasks below get run with their needed frequncy. 
 // This version separates "needs to be fast" (which run every tick) and
-// "can be slow" which are then individually controlled  by setting value of "tick_count' 
+// "can be slow" which are then individually controlled  by setting value of tick_count
 // for each function.  The big win is getting heavy functions onto a slower path!
 // FAST path — runs with every tick
 // - remote commands
@@ -9912,8 +9912,7 @@ void handleButton2Press()
 gboolean ui_tick(gpointer gook) {
   // ---------------------------------------------------------------
   // FAST PATH — runs every 1 ms tick
-  // Only time-critical work: CW key polling, tuning, PTT, remote I/O
-  // Keep this section SHORT — no I2C, no redraws, no field scans
+  // time-critical work: CW key polling, tuning, PTT, remote I/O
   // ---------------------------------------------------------------
 
 	// Process remote command queue (can affect TX state)
@@ -9959,8 +9958,8 @@ gboolean ui_tick(gpointer gook) {
 	save_user_settings(0);
 
 	// ---------------------------------------------------------------
-	// SLOW PATH — each block sets its own tick_count (ms period).
-	// ticks increments every 1ms and wraps at 10000.
+	// SLOW PATH — each block has its own tick_count (ms period).
+	// ticks increments every 1ms and wrap at 10000.
 	// Each block fires when (ticks % tick_count == 0).
 	// To change a period, edit the tick_count line at the top of
 	// that block. The comments show the original period and the
@@ -9980,7 +9979,7 @@ gboolean ui_tick(gpointer gook) {
 	}
 
 	// Dirty field invalidation scan
-	// Original: wf_spd | Recommended: 5ms (cheap flag checks + rect calls)
+	// Original: wf_spd | Recommended: 5ms (cheap)
 	tick_count = 5;
 	if (ticks % tick_count == 0)
 	{
@@ -9992,8 +9991,8 @@ gboolean ui_tick(gpointer gook) {
 	}
 
 	// TX power / VSWR display
-	// Original: wf_spd | Recommended: 20ms (fast enough for human eye)
-	tick_count = 20;
+	// Original: wf_spd | Recommended: 50ms (fast enough for human eye)
+	tick_count = 50;
 	if (ticks % tick_count == 0)
 	{
 		if (in_tx)
@@ -10006,8 +10005,8 @@ gboolean ui_tick(gpointer gook) {
 	}
 
 	// Layout refresh
-	// Original: wf_spd | Recommended: 20ms (triggered by flag, usually a no-op)
-	tick_count = 20;
+	// Original: wf_spd | Recommended: 50ms (triggered by flag, usually a no-op)
+	tick_count = 50;
 	if (ticks % tick_count == 0)
 	{
 		if (layout_needs_refresh)
@@ -10061,8 +10060,8 @@ gboolean ui_tick(gpointer gook) {
 	}
 
 	// Soft keyboard long-press alternate character
-	// Original: wf_spd | Recommended: 20ms (500ms threshold checked inside)
-	tick_count = 20;
+	// Original: wf_spd | Recommended: 50ms (500ms threshold checked inside)
+	tick_count = 50;
 	if (ticks % tick_count == 0)
 	{
 		if (f_focus && focus_since + 500 < millis() &&
@@ -10075,8 +10074,8 @@ gboolean ui_tick(gpointer gook) {
 	}
 
 	// Filter crossover guard (prevent low > high)
-	// Original: wf_spd | Recommended: 20ms (cheap arithmetic, just don't hammer set_field)
-	tick_count = 20;
+	// Original: wf_spd | Recommended: 50ms (cheap arithmetic, just don't hammer set_field)
+	tick_count = 50;
 	if (ticks % tick_count == 0)
 	{
 		char new_value[20];
@@ -10174,8 +10173,8 @@ gboolean ui_tick(gpointer gook) {
 	}
 
 	// MFK volume lock on inactivity
-	// Original: wf_spd | Recommended: 20ms (timeout checked inside, 20ms resolution is fine)
-	tick_count = 20;
+	// Original: wf_spd | Recommended: 50ms (timeout checked inside, 20ms resolution is fine)
+	tick_count = 50;
 	if (ticks % tick_count == 0)
 	{
 		if (!mfk_locked_to_volume && (sbitx_millis() - mfk_last_ms) > mfk_timeout_ms)
@@ -10231,7 +10230,7 @@ gboolean ui_tick(gpointer gook) {
 	}
 
 	return TRUE;
-}
+}   
 			
 // Apply ui_scale to all font heights in font_table.
 static void apply_ui_scale(void)
