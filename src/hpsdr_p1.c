@@ -77,6 +77,9 @@ static gboolean hpsdr_watchdog(gpointer data);
 static void    *hpsdr_poll_thread(void *arg);
 // Public: hpsdr_init, hpsdr_stop, hpsdr_is_connected, hpsdr_poll (defined in .h)
 
+// Section 6: USB
+void uac_push_iq(double i_val, double q_val);
+
 // -----------------------------------------------------------------------------
 // Compile-time constants (protocol-independent)
 // -----------------------------------------------------------------------------
