@@ -376,13 +376,13 @@ void hamlib_start() {
     welcome_socket = socket(PF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
 
     serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port = htons(5111);
+    serverAddr.sin_port = htons(51111);
     serverAddr.sin_addr.s_addr = INADDR_ANY;
     memset(serverAddr.sin_zero, '\0', sizeof serverAddr.sin_zero);
 
     bind(welcome_socket, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
     listen(welcome_socket, 5);
-    printf("Server listening on port 5111\n");
+    printf("Server listening on port 51111\n");
     
 }
 
