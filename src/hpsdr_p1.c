@@ -1,5 +1,5 @@
 // hpsdr_p1.c — HPSDR Protocol 1 interface for sBitx
-// Now extended to also provide 24bit I&Q via USB connection
+// Now extended to provide 24bit I&Q via USB connection
 // to support a broader range of external SDR applications.
 //
 // Provides the interface between the sBitx and an external SDR application
