@@ -217,11 +217,12 @@ static void rx_filter_and_decimate(double i0, double i1, double q0, double q1) {
   }
 
   // Stage the decimated sample; flush to EP6 when the buffer is full
-  iq_buf_i[iq_buf_count] = filt_i * hpsdr_iq_gain;
-  iq_buf_q[iq_buf_count] = filt_q * hpsdr_iq_gain;
+  double out_i = filt_i * hpsdr_iq_gain;
+  double out_q = filt_q * hpsdr_iq_gain;
+  iq_buf_i[iq_buf_count] = out_i;
+  iq_buf_q[iq_buf_count] = out_q;
+  uac_push_iq(out_i, out_q);   // ← correct values, before increment
   iq_buf_count++;
-  uac_push_iq(iq_buf_i[iq_buf_count], iq_buf_q[iq_buf_count]);  // added for USB support
-
   if (iq_buf_count >= SAMPLES_PER_PKT) {
     build_and_send_packet();
     iq_buf_count = 0;
@@ -232,7 +233,9 @@ static void rx_filter_and_decimate(double i0, double i1, double q0, double q1) {
 // Selects the 48 kHz decimation path or the 96 kHz pass-through based on
 // the sample rate negotiated with the SDR app.
 void hpsdr_send_iq(double *i_samples, double *q_samples, int n) {
-  if (!client_active || hpsdr_sock < 0) return;
+  int hpsdr_live = client_active && (hpsdr_sock >= 0);
+  int uac_live   = uac_is_active();
+  if (!hpsdr_live && !uac_live) return;
 
   if (hpsdr_sample_rate == 48000) {
     // 2:1 decimation path: feed sample pairs into the half-band filter
