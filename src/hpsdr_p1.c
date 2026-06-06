@@ -79,6 +79,7 @@ static void    *hpsdr_poll_thread(void *arg);
 
 // Section 6: USB
 void uac_push_iq(double i_val, double q_val);
+int  uac_is_active(void);
 
 // -----------------------------------------------------------------------------
 // Compile-time constants (protocol-independent)
