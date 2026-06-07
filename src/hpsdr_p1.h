@@ -36,3 +36,5 @@ void hpsdr_send_iq(double *i_samples, double *q_samples, int n);
 int  hpsdr_tx_iq_active(void);
 // Retrieve up to max_samples 96 kHz TX IQ pairs; returns count actually written
 int  hpsdr_get_tx_iq(double *out_i, double *out_q, int max_samples);
+
+extern int uac_init(void);
