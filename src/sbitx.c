@@ -2862,8 +2862,11 @@ void setup()
   if (hpsdr_init() == 0) {
       hpsdr_poll();  // launches background listener thread
   }
-	delay(2000);
-	//	pf_debug = fopen("am_test.raw", "w");
+  // start USB Audio Class gadget (sBitx IQ device visible to Windows)
+  uac_init();
+	
+  delay(2000);
+  //	pf_debug = fopen("am_test.raw", "w");
 }
 
 void sdr_request(char *request, char *response)
