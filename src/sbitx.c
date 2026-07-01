@@ -1432,6 +1432,34 @@ void rx_linear(const double *iq_i, const double *iq_q, int32_t *output_speaker, 
   for (i = 0; i < MAX_BINS; i++)
     r->fft_freq[i] = fft_out[i];
 
+  // Sideband selection: zero the unwanted image
+  // IQ mixing already attenuates the image; zeroing the unwanted half adds
+  // a second stage of rejection (typically >60 dB combined). This runs
+  // first, before any per-bin DSP, so every later stage (notch, noise
+  // estimation, spectral subtraction, Wiener filter, bin smoothing) only
+  // ever sees the bins that will actually reach the demodulator. In
+  // particular, bin smoothing blends each bin with its neighbors, so if it
+  // ran before this zeroing the edge bin of the kept passband would blend
+  // in energy from the discarded image on the other side of the boundary.
+  switch (r->mode) {
+  case MODE_LSB:
+  case MODE_CWR:
+    for (i = 0; i < MAX_BINS / 2; i++) {
+      __real__ r->fft_freq[i] = 0;
+      __imag__ r->fft_freq[i] = 0;
+    }
+    break;
+  case MODE_AM:
+  case MODE_FM:   // FM spectrum is symmetric — keep both halves intact
+    break;
+  default:
+    for (i = MAX_BINS / 2; i < MAX_BINS; i++) {
+      __real__ r->fft_freq[i] = 0;
+      __imag__ r->fft_freq[i] = 0;
+    }
+    break;
+  }
+
   // Zero-beat indicator for CW modes (UI feedback, no effect on audio)
   if (r->mode == MODE_CW || r->mode == MODE_CWR) {
     int prev_indicator = zero_beat_indicator;
@@ -1511,8 +1539,11 @@ void rx_linear(const double *iq_i, const double *iq_q, int32_t *output_speaker, 
         double new_magnitude;
 
         // Sigmoid-based reduction factor
+        // Falls from ~1 toward ~0 as snr rises, so noise-dominated bins
+        // (low snr) get subtracted hard while signal-dominated bins
+        // (high snr) are left mostly alone.
         double reduction_factor =
-            1.0 / (1.0 + exp(-5.0 * (snr - 0.5))); // Sharp and low-midpoint curve
+            1.0 / (1.0 + exp(5.0 * (snr - 0.5))); // Sharp and low-midpoint curve
 
         // Calculate new magnitude with residual noise preservation
         double noise_residual = 0.10; // Retain 10% of noise, reduces
@@ -1549,34 +1580,19 @@ void rx_linear(const double *iq_i, const double *iq_q, int32_t *output_speaker, 
         r->fft_freq[i] *= wiener_filter;
       }
 
-      // Bin smoothing
+      // Bin smoothing (magnitude-only)
+      // Averaging complex bins directly can partially cancel when
+      // neighboring phases aren't aligned, which loses signal that was
+      // never noise. Smooth the magnitude, then reapply the bin's own
+      // unsmoothed phase, matching the approach spectral subtraction
+      // already uses above.
       for (i = 1; i < MAX_BINS - 1; i++) {
-        r->fft_freq[i] =
-            (0.8 * r->fft_freq[i]) + (0.1 * r->fft_freq[i - 1]) + (0.1 * r->fft_freq[i + 1]);
+        double mag_smoothed = 0.8 * cabs(r->fft_freq[i]) + 0.1 * cabs(r->fft_freq[i - 1]) +
+                               0.1 * cabs(r->fft_freq[i + 1]);
+        double phase = carg(r->fft_freq[i]);
+        r->fft_freq[i] = mag_smoothed * cexp(I * phase);
       }
     }
-  }
-
-  // Sideband selection: zero the unwanted image
-  // IQ mixing already attenuates the image; zeroing the unwanted half adds
-  // a second stage of rejection (typically >60 dB combined).
-  switch (r->mode) {
-  case MODE_LSB:
-  case MODE_CWR:
-    for (i = 0; i < MAX_BINS / 2; i++) {
-      __real__ r->fft_freq[i] = 0;
-      __imag__ r->fft_freq[i] = 0;
-    }
-    break;
-  case MODE_AM:
-  case MODE_FM:   // FM spectrum is symmetric — keep both halves intact
-    break;
-  default:
-    for (i = MAX_BINS / 2; i < MAX_BINS; i++) {
-      __real__ r->fft_freq[i] = 0;
-      __imag__ r->fft_freq[i] = 0;
-    }
-    break;
   }
 
   // Bandpass FIR filter (applied in frequency domain)
@@ -1613,9 +1629,9 @@ void rx_linear(const double *iq_i, const double *iq_q, int32_t *output_speaker, 
   // Inverse FFT, AGC, and demodulation to speaker/tx
   // output buffers.
   //////////////////////////////////////////////////
-    
-  my_fftw_execute(r->plan_rev);
 
+  my_fftw_execute(r->plan_rev);
+  
   // AGC (operates on the valid second half of the overlap-and-save output).
   // agc2() returns AGC_TARGET_OUTPUT / agc_gain — a normalised signal-strength
   // estimate that is bounded to roughly [1, AGC_TARGET_OUTPUT (30,000)].
@@ -1642,7 +1658,7 @@ void rx_linear(const double *iq_i, const double *iq_q, int32_t *output_speaker, 
 			int sq_open = squelch_is_open();
 			for (i = 0; i < MAX_BINS / 2; i++) {
 				double mag = cabs(r->fft_time[i + (MAX_BINS / 2)]);
-				
+		
 				// Track the DC offset (carrier amplitude) using a simple low-pass filter
 				am_dc_offset = (am_dc_offset * 0.999) + (mag * 0.001);
 				
