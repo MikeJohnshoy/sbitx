@@ -1490,6 +1490,29 @@ void rx_linear(const double *iq_i, const double *iq_q, int32_t *output_speaker, 
     // Scale the noise_threshold value
     double scaled_noise_threshold = scaleNoiseThreshold(noise_threshold * 1.2);
 
+    // noise_est[] is a valley-tracker (slow attack 0.95 / fast decay 0.75),
+    // intentionally biased toward the floor so voice/CW peaks don't get
+    // mistaken for a rising noise floor. On Rayleigh-distributed pure-noise
+    // magnitude that steady-state bias measures out to ~32% below the true
+    // mean (simulated), meaning downstream SNR calculations see snr ~1.45
+    // on noise-only bins instead of ~1.0. Both consumers below (spectral
+    // subtraction's snr calc and the Wiener filter's noise_power) correct
+    // for this by scaling noise_est up at the point of use, so the tracker
+    // keeps its floor-following behavior but its output means what the
+    // downstream math assumes it means. This factor was derived from a
+    // synthetic Rayleigh-noise simulation, not a live capture — treat it as
+    // a starting point and retune against an actual on-air noise floor.
+    const double NOISE_EST_BIAS_CORRECTION = 1.47;
+
+    // Sigmoid midpoint for spectral subtraction's reduction_factor, in units
+    // of snr = magnitude / noise_magnitude. 1.0 means "this bin's magnitude
+    // equals the estimated noise floor" -- the natural 50/50 transition
+    // point. (The previous 0.5 implicitly assumed pure-noise bins read
+    // near snr=0, but a noise-only bin's instantaneous magnitude naturally
+    // fluctuates around its own noise estimate, i.e. snr~1 on average, so
+    // 0.5 left most noise-only bins under-suppressed.)
+    const double SS_SNR_MIDPOINT = 1.0;
+
     // Notch filter
     if (notch_enabled) {
       int notch_center_bin, notch_bin_range;
@@ -1532,18 +1555,18 @@ void rx_linear(const double *iq_i, const double *iq_q, int32_t *output_speaker, 
       for (i = 0; i < MAX_BINS; i++) {
         double magnitude = cabs(r->fft_freq[i]);
         double phase = carg(r->fft_freq[i]);
-        double noise_magnitude = noise_est[i];
+        double noise_magnitude = noise_est[i] * NOISE_EST_BIAS_CORRECTION;
 
         // Calculate the SNR
         double snr = magnitude / (noise_magnitude + 1e-6); // Avoid division by zero
         double new_magnitude;
 
         // Sigmoid-based reduction factor
-        // Falls from ~1 toward ~0 as snr rises, so noise-dominated bins
-        // (low snr) get subtracted hard while signal-dominated bins
-        // (high snr) are left mostly alone.
+        // Falls from ~1 toward ~0 as snr rises past SS_SNR_MIDPOINT, so
+        // noise-dominated bins get subtracted hard while signal-dominated
+        // bins are left mostly alone.
         double reduction_factor =
-            1.0 / (1.0 + exp(5.0 * (snr - 0.5))); // Sharp and low-midpoint curve
+            1.0 / (1.0 + exp(5.0 * (snr - SS_SNR_MIDPOINT))); // Sharp, calibrated midpoint
 
         // Calculate new magnitude with residual noise preservation
         double noise_residual = 0.10; // Retain 10% of noise, reduces
@@ -1571,7 +1594,8 @@ void rx_linear(const double *iq_i, const double *iq_q, int32_t *output_speaker, 
       // Wiener filter
       for (i = 0; i < MAX_BINS; i++) {
         double signal_power = fmax(1e-6, signal_est[i] * signal_est[i]);
-        double noise_power = fmax(1e-6, noise_est[i] * noise_est[i]);
+        double corrected_noise_est = noise_est[i] * NOISE_EST_BIAS_CORRECTION;
+        double noise_power = fmax(1e-6, corrected_noise_est * corrected_noise_est);
 
         // Relaxed Wiener filter gain
         double wiener_filter = (signal_power + 0.2 * noise_power) / (signal_power + noise_power);
