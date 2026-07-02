@@ -576,11 +576,11 @@ static void build_and_send_packet(void) {
       int     idx = frame * 63 + s;
       uint8_t *sp = fp + 8 + s * 8;
 
-      int32_t i_val = (int32_t)(iq_buf_i[idx] * 559240.0);
+      int32_t i_val = (int32_t)(iq_buf_i[idx] * 8388607.0);
       if (i_val >  8388607)  i_val =  8388607;
       if (i_val < -8388608)  i_val = -8388608;
 
-      int32_t q_val = (int32_t)(iq_buf_q[idx] * 559240.0);
+      int32_t q_val = (int32_t)(iq_buf_q[idx] * 8388607.0);
       if (q_val >  8388607)  q_val =  8388607;
       if (q_val < -8388608)  q_val = -8388608;
 
