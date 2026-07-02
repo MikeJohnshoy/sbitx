@@ -542,7 +542,7 @@ static void build_and_send_packet(void) {
     int cc_addr = (seq_for_cc * 2 + frame) % 5;
 
     // C0: slot index in bits 7:3, current PTT/MOX state in bit 0
-    fp[3] = (cc_addr << 3) | (in_tx ? 1 : 0);
+    fp[3] = (cc_addr << 1) | (in_tx ? 1 : 0);
 
     // C1–C4: slot payload (Section 4.3)
     switch (cc_addr) {
