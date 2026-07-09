@@ -5,6 +5,7 @@ void cw_abort();
 void cw_tx(char *message, int freq);
 void cw_poll(int bytes_available, int tx_is_on);
 float cw_next_sample();
+int cw_key_is_silent(void);
 
 // added to support zerobeat display of cw decoder status
 int cw_get_max_bin_highlight_index(void);
