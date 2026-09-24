@@ -2,11 +2,18 @@
 #include <linux/types.h>
 #include <stdint.h>
 #include <wiringPi.h>
-#include "i2cbb.h"
+#include "i2c.h"
 #include "si5351.h"
 
-#define SDA 23 
-#define SCL 22
+// The si5351 and the board's RTC share one physical bus, and the
+// i2c-rtc-gpio device tree overlay already exposes it as a kernel I2C
+// bus - the same SDA/SCL lines the bit-banged driver used to drive
+// directly. Bus 22 is what `i2cdetect -y 22` answers on, with the
+// si5351 at SI5351_ADDR (0x60). It's a Linux-assigned number, not a
+// fixed hardware address, so it can move across a kernel or config
+// update; if the si5351 stops responding after one, re-check with
+// `i2cdetect -l`.
+#define SI5351_I2C_BUS 22
 
 #define SI_CLK0_CONTROL  16      // Register definitions
 #define SI_CLK1_CONTROL 17
@@ -53,14 +60,28 @@ static int i2c_error_count = 0;       // counts I2C Errors
 
 /*
 void i2cSendRegister(uint8_t reg, uint8_t* data, uint8_t n){
-  i2cbb_write_i2c_block_data (SI5351_ADDR, reg, n, data); 
+  i2c_write_i2c_block_data (SI5351_ADDR, reg, n, data);
 }
 */
 
-void i2cSendRegister(uint8_t reg, uint8_t val){ 
-  while (i2cbb_write_byte_data(SI5351_ADDR, reg, val) < 0)
+// The retry loop is bounded. Bit-banging had no way to fail before the
+// first bit went out, so an unbounded retry could only spin while the
+// bus was genuinely busy. The kernel driver can fail up front - a bus
+// that didn't open returns an error on every call - and an unbounded
+// loop there would hang startup forever printing "Repeating I2C".
+#define I2C_SEND_MAX_ATTEMPTS 20   // ~20ms worst case at 1ms per attempt
+
+void i2cSendRegister(uint8_t reg, uint8_t val){
+  int attempts = 0;
+  while (i2c_write_byte_data(SI5351_ADDR, reg, val) < 0)
   {
     printf("Repeating I2C #%d\n",i2c_error_count++);  // reports number of I2C repeats caused by errors
+    if (++attempts >= I2C_SEND_MAX_ATTEMPTS) {
+      printf("i2cSendRegister: giving up on si5351 reg 0x%02x after %d attempts "
+             "- is the I2C bus (%d) present? try `i2cdetect -l`\n",
+             reg, attempts, SI5351_I2C_BUS);
+      return;
+    }
     delay(1);
   }
 }
@@ -250,8 +271,8 @@ void si5351_set_calibration(int32_t cal){
     xtal_freq_calibrated = cal;
 }
 
-void si5351bx_init(){ 
-  i2cbb_init(SDA, SCL);
+void si5351bx_init(){
+  i2c_init(SI5351_I2C_BUS);
 	delay(10);
   si5351_reset();
 	delay(10);
