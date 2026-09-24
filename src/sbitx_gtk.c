@@ -46,7 +46,7 @@ The initial sync between the gui values, the core radio values, settings, et al 
 #include "remote.h"
 #include "modem_ft8.h"
 #include "modem_cw.h"
-#include "i2cbb.h"
+#include "i2c.h"
 #include "adif_broadcast.h"
 #include "udp_broadcast.h"
 #include "webserver.h"
@@ -9796,9 +9796,9 @@ void rtc_read()
 {
 	uint8_t rtc_time[10];
 
-	i2cbb_write_i2c_block_data(DS3231_I2C_ADD, 0, 0, NULL);
+	i2c_write_i2c_block_data(DS3231_I2C_ADD, 0, 0, NULL);
 
-	int e = i2cbb_read_i2c_block_data(DS3231_I2C_ADD, 0, 8, rtc_time);
+	int e = i2c_read_i2c_block_data(DS3231_I2C_ADD, 0, 8, rtc_time);
 	if (e <= 0)
 	{ // start W9JES W2JON
 		printf("RTC not detected, using system time\n");
@@ -9859,12 +9859,12 @@ void rtc_write(int year, int month, int day, int hours, int minutes, int seconds
 
 	for (uint8_t i = 0; i < 7; i++)
 	{
-		int e = i2cbb_write_byte_data(DS3231_I2C_ADD, i, rtc_time[i]);
+		int e = i2c_write_byte_data(DS3231_I2C_ADD, i, rtc_time[i]);
 		if (e)
 			printf("rtc_write: error writing ds1307 register at %d index\n", i);
 	}
 
-	/*	int e =  i2cbb_write_i2c_block_data(DS1307_I2C_ADD, 0, 7, rtc_time);
+	/*	int e =  i2c_write_i2c_block_data(DS1307_I2C_ADD, 0, 7, rtc_time);
 		if (e < 0){
 			printf("RTC not written: %d\n", e);
 			return;
@@ -9900,7 +9900,7 @@ void configure_ina260()
 		(uint8_t)(CONFIG_DEFAULT >> 8),	 // MSB
 		(uint8_t)(CONFIG_DEFAULT & 0xFF) // LSB
 	};
-	if (i2cbb_write_i2c_block_data(INA260_ADDRESS, CONFIG_REGISTER, 2, config_data) < 0)
+	if (i2c_write_i2c_block_data(INA260_ADDRESS, CONFIG_REGISTER, 2, config_data) < 0)
 	{
 		printf("Error configuring INA260\n");
 		field_set("INA260OPT", "OFF");
@@ -9918,7 +9918,7 @@ void read_voltage_current(float *voltage, float *current)
 	uint8_t data_buffer[2]; // Buffer to hold raw register data
 
 	// Explicitly set the register pointer to the voltage register
-	if (i2cbb_write_i2c_block_data(INA260_ADDRESS, VOLTAGE_REGISTER, 0, NULL) < 0)
+	if (i2c_write_i2c_block_data(INA260_ADDRESS, VOLTAGE_REGISTER, 0, NULL) < 0)
 	{
 		printf("Error setting voltage register pointer\n");
 		*voltage = 0.0f;
@@ -9927,7 +9927,7 @@ void read_voltage_current(float *voltage, float *current)
 	}
 
 	// Read the voltage register (2 bytes)
-	int e = i2cbb_read_i2c_block_data(INA260_ADDRESS, VOLTAGE_REGISTER, 2, data_buffer);
+	int e = i2c_read_i2c_block_data(INA260_ADDRESS, VOLTAGE_REGISTER, 2, data_buffer);
 	if (e != 2)
 	{
 		printf("Error reading voltage register\n");
@@ -9940,7 +9940,7 @@ void read_voltage_current(float *voltage, float *current)
 	*voltage = raw_voltage * 1.25e-3f; // Convert to volts (1.25 mV per LSB)
 
 	// Explicitly set the register pointer to the current register
-	if (i2cbb_write_i2c_block_data(INA260_ADDRESS, CURRENT_REGISTER, 0, NULL) < 0)
+	if (i2c_write_i2c_block_data(INA260_ADDRESS, CURRENT_REGISTER, 0, NULL) < 0)
 	{
 		printf("Error setting current register pointer\n");
 		*voltage = 0.0f;
@@ -9949,7 +9949,7 @@ void read_voltage_current(float *voltage, float *current)
 	}
 
 	// Read the current register (2 bytes)
-	e = i2cbb_read_i2c_block_data(INA260_ADDRESS, CURRENT_REGISTER, 2, data_buffer);
+	e = i2c_read_i2c_block_data(INA260_ADDRESS, CURRENT_REGISTER, 2, data_buffer);
 	if (e != 2)
 	{
 		printf("Error reading current register\n");
@@ -10099,7 +10099,7 @@ void query_swr()
 
 	if (!in_tx)
 		return;
-	if (i2cbb_read_i2c_block_data(0x8, 0, 4, response) == -1)
+	if (i2c_read_i2c_block_data(0x8, 0, 4, response) == -1)
 		return;
 
 	vfwd = vref = 0;
