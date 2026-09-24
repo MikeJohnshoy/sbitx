@@ -18,7 +18,7 @@
 #include "sdr.h"
 #include "sdr_ui.h"
 #include "sound.h"
-#include "i2cbb.h"
+#include "i2c.h"
 #include "si5351.h"
 #include "ini.h"
 #include "para_eq.h"
@@ -1754,7 +1754,7 @@ void read_power()
 
 	if (!in_tx)
 		return;
-	if (i2cbb_read_i2c_block_data(0x8, 0, 4, response) == -1)
+	if (i2c_read_i2c_block_data(0x8, 0, 4, response) == -1)
 		return;
 
 	vfwd = vref = 0;  
@@ -2703,7 +2703,7 @@ void setup()
 
 	// detect the version of sbitx
 	uint8_t response[4];
-	if (i2cbb_read_i2c_block_data(0x8, 0, 4, response) == -1)
+	if (i2c_read_i2c_block_data(0x8, 0, 4, response) == -1)
 		sbitx_version = SBITX_DE;
 	else
 		sbitx_version = SBITX_V2;
