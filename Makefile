@@ -28,6 +28,7 @@ GLIB_LIBS = $(shell pkg-config --libs glib-2.0)
 TEST_SOURCES_dxcc = $(CLU_SOURCES)
 TEST_CFLAGS_dxcc = -Iclu/src $(GLIB_CFLAGS)
 TEST_EXTRA_LIBS_dxcc = $(GLIB_LIBS)
+TEST_SOURCES_tci = src/tci.c src/tci_stream.c src/tci_ws.c src/decim48k.c
 
 $(TARGET): $(OBJECTS) ft8_lib/libft8.a
 	$(LINK) $(LFLAGS) -o $(TARGET) $(OBJECTS) $(FFTOBJ) $(LIBPATH) $(LIBS)
