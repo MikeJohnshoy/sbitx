@@ -130,7 +130,7 @@ first; on an external keyboard type \ directly. Press Enter to execute.
     CWR    -- CW Reverse (mirror-image CW, shifts audio tone to opposite side)
     FT8    -- FT8 weak-signal digital mode (15-second periods)
     FT4    -- FT4 weak-signal digital mode (7.5-second periods, faster than FT8)
-    DIGI   -- General digital / data mode (for RTTY, JS8Call, etc.)
+    DIGI   -- General digital / data mode, for external programs (WSJT-X, JS8Call, etc.)
     2TONE  -- Two-tone test signal for SSB amplifier linearity testing
   Example: \mode LSB
 
@@ -183,6 +183,17 @@ first; on an external keyboard type \ directly. Press Enter to execute.
          through frequency much more quickly (3 speed levels).
   OFF -- encoder steps are always the same size regardless of spin speed.
   Default: off
+
+* \tci on|off
+  Turns on the TCI server, which lets programs that speak TCI (JTDX,
+  WSJT-X Improved, MSHV, loggers, Hamlib's TCI backend, and panadapters
+  such as sdrOxide) control the radio and receive its audio and I/Q over the
+  network, with no audio cable or CAT port to set up. Up to four programs at
+  once. In the program, choose TCI and enter the sBitx's address and the port
+  (\tci_port). TCI doesn't transmit yet. Default: off
+
+* \tci_port [1024-65535]
+  The network port the TCI server listens on. Default: 50001
 
 * \tclose
   Closes the currently open telnet connection to an RBN or DX cluster server.
