@@ -41,4 +41,9 @@ void tci_radio_set_volume(int percent);
 void tci_radio_set_mute(int on);
 void tci_radio_set_wpm(int wpm);
 
+// 1 when a client first sets the frequency, 0 when the last client that
+// set it disconnects or the server stops: while held, the radio's own
+// tuning controls give way to TCI's (tci_sbitx.c).
+void tci_radio_hold_dial(int held);
+
 #endif /* TCI_RADIO_H */
