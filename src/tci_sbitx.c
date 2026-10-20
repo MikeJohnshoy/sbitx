@@ -21,18 +21,6 @@
 // value asked for, so tci.c's echo is the new value and the next sample
 // doesn't send the old one back first.
 //
-// THE DIAL
-//
-// The first client to set the frequency takes the dial: sbitx turns on its
-// VFO LOCK, which stops the knob, the spectrum, the keypad and the band
-// controls retuning under the program, and shows "VFO LOCK - TCI". The
-// lock comes off when the last client that set the frequency disconnects.
-// It is the ordinary VFO LOCK, so turning it off (the VFOLK button, a long
-// press on the tuning knob) gives the dial back until the clients have
-// gone and one sets the frequency again; and if VFO LOCK was already on,
-// TCI leaves it on. Commands still tune: the web UI, the console, rigctld
-// and TCI itself.
-//
 // MODES
 //
 // TCI offers USB, LSB, CW, CWR and DIGU. DIGU is sbitx's DIGI, the
@@ -59,7 +47,6 @@
 #include "tci_radio.h"
 #include <math.h>
 #include <pthread.h>
-#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -85,9 +72,6 @@ struct pending {
   long long until;
 };
 static struct pending p_freq, p_mode, p_drive, p_volume, p_mute, p_wpm;
-
-static atomic_int dial_held, dial_takes; // takes counts each hold's start
-static int locked_by_tci;                // the GTK thread's
 
 static long long now_ms(void) {
   struct timespec ts;
@@ -201,12 +185,6 @@ void tci_radio_set_wpm(int wpm) {
   setfield_int("#tx_wpm", wpm);
 }
 
-void tci_radio_hold_dial(int held) {
-  if (held)
-    atomic_fetch_add(&dial_takes, 1);
-  atomic_store(&dial_held, held);
-}
-
 /* ---- The GTK thread ---------------------------------------------------------- */
 
 static double strength_dbm(void) {
@@ -221,30 +199,6 @@ static double strength_dbm(void) {
 static int on_off(const char *label) {
   const char *v = field_str(label);
   return v && !strcmp(v, "ON");
-}
-
-int tci_sbitx_has_dial(void) { return locked_by_tci; }
-
-static void follow_dial(void) {
-  static int handled_take;
-  int held = atomic_load(&dial_held), take = atomic_load(&dial_takes);
-  int lock_on = on_off("VFOLK");
-  if (locked_by_tci && !lock_on) {
-    locked_by_tci = 0; // VFO LOCK turned off: the dial is the radio's again
-    printf("tci: VFO lock turned off - the dial is sbitx's again\n");
-  }
-  if (held && take != handled_take) {
-    handled_take = take;
-    if (!lock_on) {
-      set_vfo_lock(1);
-      locked_by_tci = 1;
-      printf("tci: a client has set the frequency - VFO locked\n");
-    }
-  } else if (!held && locked_by_tci) {
-    set_vfo_lock(0);
-    locked_by_tci = 0;
-    printf("tci: the clients that set the frequency have gone - VFO unlocked\n");
-  }
 }
 
 static void publish(void) {
@@ -291,11 +245,8 @@ void tci_sbitx_tick(void) {
   ticks++;
   if (ticks % SETTINGS_TICKS == 0)
     follow_settings();
-  if (ticks % PUBLISH_TICKS == 0) {
-    if (tci_running())
-      publish();
-    follow_dial();
-  }
+  if (ticks % PUBLISH_TICKS == 0 && tci_running())
+    publish();
 }
 
 /* ---- The audio thread ---------------------------------------------------------- */

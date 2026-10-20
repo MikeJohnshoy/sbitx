@@ -36,10 +36,6 @@ threads already wrote to it; TCI is a fourth (§3.1).
 
 **PSK31, RTTY and the fldigi link are gone** (§9).
 
-**A TCI program that sets the frequency takes the dial**: sbitx turns on
-VFO LOCK, which now holds every local tuning control, until the program
-disconnects (§3.6).
-
 **Size:** about 2000 lines carried over (`tci_ws.c`, `tci_stream.c`,
 `tci.c`'s protocol, `decim48k.c`), about 300 new (`tci_sbitx.c`, the
 radio adapter), about 80 changed in sbitx, about 470 removed with
@@ -159,49 +155,6 @@ microphone already feeds `tx_process()` from a queue the same way
 `tci_stream.h` (`tci_tx_audio_owned()`, `tci_pull_audio_tx()`,
 `tci_tx_audio_idle()`); sbitx doesn't call them yet.
 
-### 3.6 The dial
-
-**The first TCI client to set the frequency takes the dial.** `tci.c`
-marks each client that sets the frequency (a `vfo` or `dds` set in
-range) and calls `tci_radio_hold_dial(1)` when the first one does, and
-`tci_radio_hold_dial(0)` when the last of them disconnects or the server
-stops. Reads, mode changes and the other sets don't take it, so a logger
-or a panadapter that only reads leaves the knob alone.
-
-**Taking the dial is turning on VFO LOCK.** On the next 10 ms tick,
-`tci_sbitx.c` turns VFO LOCK on (`set_vfo_lock()`), and the banner reads
-"VFO LOCK - TCI". When the hold ends it turns it off again, but only if
-TCI turned it on and it is still on. So:
-
-- turning VFO LOCK off (the VFOLK button, a long press on the tuning
-  knob, `\vfolk off`) gives the dial back for the rest of that hold; it is
-  taken again only after every holding client has gone and one sets the
-  frequency again;
-- if VFO LOCK was already on, TCI leaves it on when the hold ends;
-- it is never saved locked: sbitx turns VFOLK off at start-up anyway.
-
-**VFO LOCK now holds every local tuning control**, for everyone, with or
-without TCI: the knob, the mouse wheel and the arrow keys on FREQ
-(`do_tuning()`, as before), and now also a click or drag on the spectrum
-(`do_spectrum()`), the frequency keypad, the band buttons, the band
-dropdown and the band-select hardware button (`change_band()`, and
-`edit_field()` for `#band`), the band-stack position
-(`do_band_stack_position()`), the FT8/FT4 automatic frequency
-(`set_ftx_frequency()`), and VFO A/B, which springs back. With RIT on, the
-knob still moves RIT, so CW receive can be trimmed without moving the
-program's dial.
-
-**Commands still tune.** The test is `local_tuning_locked()`: VFO LOCK on
-and not inside `cmd_exec()`, which counts its depth per thread. Every
-command comes through `cmd_exec()` - the web UI's, the 8081 console's,
-rigctld's, TCI's, and a command typed on sbitx's own text field - so all
-of them tune as before, and a TCI client and the web UI can both move the
-dial while it is held.
-
-The long press on the tuning knob now toggles from VFO LOCK's actual
-state; it kept its own copy before, which TCI's lock would have left a
-press behind.
-
 ## 4. Modes over TCI
 
 TCI offers USB, LSB, CW, CWR and DIGI:
@@ -262,7 +215,7 @@ WSJT-X on the loopback and JTDX on TCI can both receive at once.
 
 ## 7. Settings
 
-- `TCI` ON or OFF, **ON by default**, and `TCI_PORT`, **50001** by
+- `TCI` ON or OFF, **OFF by default**, and `TCI_PORT`, **50001** by
   default (1024-65535), Hamlib's and ExpertSDR3's default. They are
   off-screen fields (`#tci`, `#tci_port`), kept in `user_settings.ini`
   like sbitx's other settings, and set with `\tci on`, `\tci off` and
@@ -304,18 +257,15 @@ WSJT-X on the loopback and JTDX on TCI can both receive at once.
 needs and runs it; nothing in the radio program's own build changes.
 
 - `/tmp/sbitx-test_tci_ws`: 31 checks of the WebSocket server alone.
-- `/tmp/sbitx-test_tci`: 77 checks of the server with a stub radio: the
+- `/tmp/sbitx-test_tci`: 67 checks of the server with a stub radio: the
   burst's order and form; every set echoed to every client, with the value
   in force when it was out of range or not offered; reads answered to the
   asker alone; frequency, mode (uppercase accepted), drive (0 held at 1),
   volume in dB, mute and rx_mute, CW speed and speed-up; RIT, `trx`,
   split and XIT answered without setting anything; several commands to a
   message; a change elsewhere reaching both clients within about 50 ms,
-  and nothing sent while nothing changes; the dial taken by the first
-  client to set the frequency (not by reads, mode changes or a frequency
-  out of range), held while any client that set it remains, and given
-  back once, when the last goes or the server stops; four clients and the
-  fifth refused; receive audio and I/Q frames, their headers and samples, with I
+  and nothing sent while nothing changes; four clients and the fifth
+  refused; receive audio and I/Q frames, their headers and samples, with I
   and Q as given; stopping and starting again on the same port;
   `decim48k`'s passband and stopband.
 
@@ -356,8 +306,7 @@ styles, whose numbering style files and the web UI rely on.
 ## 10. Decisions taken
 
 1. **Transport:** `tci_ws.c` from maxibitx, not the web UI's mongoose.
-2. **Port 50001**, and **on by default**: it listens from start-up
-   unless turned off with `\tci off`, which is saved like any setting.
+2. **Port 50001**, and **off unless enabled**.
 3. **Modes:** USB, LSB, CW, CWR and DIGI (TCI's `digu`); DIGI is the
    wideband setting for FT8, AM, FM and the rest done by an external
    program. sbitx's own FT8, FT4, AM and FM read as `digu`, and in them
@@ -370,9 +319,6 @@ styles, whose numbering style files and the web UI rely on.
 6. **First delivery:** steps 0-3; transmit after they have been tried.
 7. **At most 4 clients**, a constant, not a setting.
 8. **RIT is reported but not set over TCI**; XIT and split report off.
-9. **The dial:** the first client to set the frequency turns on VFO LOCK
-   until the last such client goes; VFO LOCK holds every local tuning
-   control; commands (web UI, consoles, rigctld, TCI) still tune (§3.6).
 
 ## 11. Open
 
