@@ -18,4 +18,8 @@ void tci_sbitx_tick(void);
 // NULL for both while transmitting, which sends silence.
 void tci_sbitx_rx_block(const int32_t *speaker, const double *i, const double *q, int n);
 
+// The GTK thread: nonzero while TCI has turned on VFO LOCK because a
+// client has set the frequency (tci_sbitx.c, THE DIAL).
+int tci_sbitx_has_dial(void);
+
 #endif /* TCI_SBITX_H */
