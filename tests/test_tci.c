@@ -5,7 +5,8 @@
 // and its form, echoes of every set to every client, reads answered to the
 // asker alone, setting frequency, mode, drive, volume, mute and CW speed,
 // RIT and transmit refused with the state in force, a change made elsewhere
-// reaching every client, several commands to a message, the client limit,
+// reaching every client, the dial taken by the first client to set the
+// frequency and given back when the last such client goes, several commands to a message, the client limit,
 // the receive audio and I/Q streams (I and Q as given), stopping and
 // starting again, and decim48k's response. The harness plays the audio
 // thread itself.
@@ -67,6 +68,21 @@ void tci_radio_set_drive(int drive) { STUB_SET(drive, drive); }
 void tci_radio_set_volume(int percent) { STUB_SET(volume, percent); }
 void tci_radio_set_mute(int on) { STUB_SET(mute, on != 0); }
 void tci_radio_set_wpm(int wpm) { STUB_SET(wpm, wpm); }
+
+static int dial_held, dial_calls;
+void tci_radio_hold_dial(int held) {
+  pthread_mutex_lock(&radio_lock);
+  dial_held = held;
+  dial_calls++;
+  pthread_mutex_unlock(&radio_lock);
+}
+
+static void dial_now(int *held, int *calls) {
+  pthread_mutex_lock(&radio_lock);
+  *held = dial_held;
+  *calls = dial_calls;
+  pthread_mutex_unlock(&radio_lock);
+}
 
 static struct tci_radio_state radio_now(void) {
   struct tci_radio_state s;
@@ -372,6 +388,67 @@ static void test_changes_elsewhere(void) {
   close(b);
 }
 
+// Waits up to ms for the dial's state to be held.
+static int dial_becomes(int held, int ms) {
+  int h, n;
+  for (long long end = now_ms() + ms; now_ms() < end; usleep(10000)) {
+    dial_now(&h, &n);
+    if (h == held)
+      return 1;
+  }
+  return 0;
+}
+
+static void test_dial(void) {
+  printf("the dial\n");
+  usleep(200000); // the earlier clients have gone
+  int h, n, n0;
+  dial_now(&h, &n0);
+  CHECK(!h, "not held with no client");
+  int reader = quick_connect(), a = quick_connect(), b = quick_connect();
+  if (reader < 0 || a < 0 || b < 0) {
+    CHECK(0, "three clients");
+    return;
+  }
+  send_text(reader, "dds:0;");
+  send_text(reader, "modulation:0,usb;");
+  expect(reader, "modulation:0,usb;", 500);
+  dial_now(&h, &n);
+  CHECK(!h && n == n0, "reads and a mode change don't take it");
+  send_text(a, "vfo:0,0,100;");
+  expect(a, "vfo:0,0,10136000;", 500);
+  dial_now(&h, &n);
+  CHECK(!h, "nor does a frequency out of range");
+  send_text(a, "vfo:0,0,14074000;");
+  expect(a, "vfo:0,0,14074000;", 500);
+  dial_now(&h, &n);
+  CHECK(h && n == n0 + 1, "the first client to set the frequency takes it");
+  send_text(b, "dds:0,14076000;");
+  expect(b, "dds:0,14076000;", 500);
+  send_text(a, "dds:0,14074000;");
+  expect(a, "dds:0,14074000;", 500);
+  dial_now(&h, &n);
+  CHECK(h && n == n0 + 1, "more sets, from it or another, change nothing");
+  close(reader);
+  close(a);
+  usleep(200000);
+  dial_now(&h, &n);
+  CHECK(h && n == n0 + 1, "held while one client that set it remains");
+  close(b);
+  CHECK(dial_becomes(0, 1000), "given back when the last one goes");
+  dial_now(&h, &n);
+  CHECK(n == n0 + 2, "once");
+
+  a = quick_connect();
+  send_text(a, "vfo:0,0,7074000;");
+  CHECK(dial_becomes(1, 1000), "taken again by the next client to set it");
+  tci_stop();
+  dial_now(&h, &n);
+  CHECK(!h, "given back when the server stops");
+  close(a);
+  tci_init("127.0.0.1", ws_test_port, TCI_DEFAULT_MAX_CLIENTS);
+}
+
 static void test_limit(void) {
   printf("client limit\n");
   int fds[TCI_DEFAULT_MAX_CLIENTS];
@@ -501,6 +578,7 @@ int main(void) {
   test_burst();
   test_sets_and_echoes();
   test_changes_elsewhere();
+  test_dial();
   test_limit();
   test_streams();
   test_restart(ws_test_port);
