@@ -1,0 +1,271 @@
+// tci_sbitx.c
+//
+// sbitx's side of the TCI server: tci_radio.h for tci.c, the TCI and
+// TCI_PORT settings, and the receive streams. docs/tci_design_study.md.
+//
+// THREADS
+//
+// sbitx's controls belong to the GTK thread, and TCI's commands arrive on
+// network threads, so the two never touch each other directly:
+//
+//   - The GTK thread publishes the state TCI reports (frequency, mode, TX,
+//     drive, volume, mute, RIT, CW speed, the S-meter) every 10 ms, under
+//     a lock, from tci_sbitx_tick(); tci_radio_get() copies it out.
+//   - A set is queued with remote_execute(), which the GTK thread runs on
+//     its next tick, as the web UI, HPSDR and the 8081 console do. It uses
+//     sbitx's own commands: freq, mode, and setfield, which sets a field as
+//     the screen would.
+//
+// A set is reported at once: until the published state shows it (or for
+// PENDING_MS, if sbitx took another value), tci_radio_get() reports the
+// value asked for, so tci.c's echo is the new value and the next sample
+// doesn't send the old one back first.
+//
+// MODES
+//
+// TCI offers USB, LSB, CW, CWR and DIGU. DIGU is sbitx's DIGI, the
+// wideband setting for an external program's FT8, AM, FM and the rest, and
+// sbitx's own wideband modes (FT8, FT4, AM, FM) read as DIGU too: sbitx
+// goes on receiving, demodulating and showing them while the program works
+// in parallel. So DIGU asked for in one of them changes nothing, and in any
+// other mode selects DIGI. 2TONE reads as USB.
+//
+// RECEIVE STREAMS
+//
+// The demodulated audio is decimated from 96 to 48 kHz and scaled so int32
+// full scale is 1, the level the loopback gives WSJT-X. The I/Q is the
+// mixer's filtered output, the block HPSDR gets (sound_process(), sbitx.c),
+// with I and Q as they are: HPSDR swaps them, which mirrors the spectrum
+// the way SparkSDR expects, so as they are, a station above the dial is at
+// a positive frequency. While transmitting both are silence.
+
+#include "tci_sbitx.h"
+#include "decim48k.h"
+#include "sdr.h"
+#include "sdr_ui.h"
+#include "tci.h"
+#include "tci_radio.h"
+#include <math.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#define PUBLISH_TICKS 10   // ui_tick runs every 1 ms: state every 10 ms
+#define SETTINGS_TICKS 100 // the TCI setting every 100 ms
+#define RETRY_MS 10000     // after a failed start, wait this long to try again
+#define PENDING_MS 1000
+#define BLOCK_MAX 2048
+
+extern int in_tx;
+extern int audio_muted;         // sbitx_gtk.c: MUTE sets AUDIO to 0 and
+extern char premute_volume[16]; // keeps the level to go back to here
+extern int calculate_s_meter(struct rx *r, double rx_gain);
+
+static pthread_mutex_t state_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct tci_radio_state published;
+static char published_mode[16] = "USB";
+
+struct pending {
+  int active, value;
+  long long until;
+};
+static struct pending p_freq, p_mode, p_drive, p_volume, p_mute, p_wpm;
+
+static long long now_ms(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* ---- Modes -------------------------------------------------------------- */
+
+static int is_wideband(const char *sbitx_mode) {
+  return !strcmp(sbitx_mode, "DIGI") || !strcmp(sbitx_mode, "FT8") ||
+         !strcmp(sbitx_mode, "FT4") || !strcmp(sbitx_mode, "AM") || !strcmp(sbitx_mode, "FM");
+}
+
+static enum tci_mode tci_mode_of(const char *sbitx_mode) {
+  if (!strcmp(sbitx_mode, "LSB"))
+    return TCI_MODE_LSB;
+  if (!strcmp(sbitx_mode, "CW"))
+    return TCI_MODE_CW;
+  if (!strcmp(sbitx_mode, "CWR"))
+    return TCI_MODE_CWR;
+  if (is_wideband(sbitx_mode))
+    return TCI_MODE_DIGU;
+  return TCI_MODE_USB;
+}
+
+/* ---- tci_radio.h, on TCI's threads ---------------------------------------- */
+
+static void take(struct pending *p, int *field) {
+  if (!p->active)
+    return;
+  if (*field == p->value || now_ms() > p->until)
+    p->active = 0;
+  else
+    *field = p->value;
+}
+
+void tci_radio_get(struct tci_radio_state *s) {
+  pthread_mutex_lock(&state_lock);
+  *s = published;
+  int mode = (int)s->mode;
+  take(&p_freq, &s->freq);
+  take(&p_mode, &mode);
+  take(&p_drive, &s->drive);
+  take(&p_volume, &s->volume);
+  take(&p_mute, &s->mute);
+  take(&p_wpm, &s->wpm);
+  s->mode = (enum tci_mode)mode;
+  pthread_mutex_unlock(&state_lock);
+}
+
+static void hold(struct pending *p, int value) {
+  pthread_mutex_lock(&state_lock);
+  p->active = 1;
+  p->value = value;
+  p->until = now_ms() + PENDING_MS;
+  pthread_mutex_unlock(&state_lock);
+}
+
+static void setfield(const char *id, const char *value) {
+  char cmd[64];
+  snprintf(cmd, sizeof(cmd), "setfield %s %s", id, value);
+  remote_execute(cmd);
+}
+
+static void setfield_int(const char *id, int value) {
+  char v[16];
+  snprintf(v, sizeof(v), "%d", value);
+  setfield(id, v);
+}
+
+void tci_radio_set_freq(int hz) {
+  char cmd[32];
+  snprintf(cmd, sizeof(cmd), "freq %d", hz);
+  hold(&p_freq, hz);
+  remote_execute(cmd);
+}
+
+void tci_radio_set_mode(enum tci_mode m) {
+  static const char *const sbitx_mode[] = {"USB", "LSB", "CW", "CWR", "DIGI"};
+  char now[16], cmd[32];
+  pthread_mutex_lock(&state_lock);
+  strcpy(now, published_mode);
+  pthread_mutex_unlock(&state_lock);
+  if (m == TCI_MODE_DIGU && is_wideband(now))
+    return; // already in the wideband group: sbitx keeps its own mode
+  if (tci_mode_of(now) == m && !strcmp(now, sbitx_mode[m]))
+    return;
+  snprintf(cmd, sizeof(cmd), "mode %s", sbitx_mode[m]);
+  hold(&p_mode, (int)m);
+  remote_execute(cmd);
+}
+
+void tci_radio_set_drive(int drive) {
+  hold(&p_drive, drive);
+  setfield_int("tx_power", drive);
+}
+
+void tci_radio_set_volume(int percent) {
+  hold(&p_volume, percent);
+  setfield_int("r1:volume", percent);
+}
+
+void tci_radio_set_mute(int on) {
+  hold(&p_mute, on != 0);
+  setfield("#mute", on ? "ON" : "OFF");
+}
+
+void tci_radio_set_wpm(int wpm) {
+  hold(&p_wpm, wpm);
+  setfield_int("#tx_wpm", wpm);
+}
+
+/* ---- The GTK thread ---------------------------------------------------------- */
+
+static double strength_dbm(void) {
+  if (!rx_list)
+    return -127.0;
+  int v = calculate_s_meter(rx_list, (double)get_rx_gain());
+  int s = v / 100, add = v % 100;
+  // S9 is -73 dBm and an S-unit 6 dB; above S9, add is the dB over it
+  return s >= 9 ? -73.0 + add : -127.0 + 6.0 * s + add;
+}
+
+static int on_off(const char *label) {
+  const char *v = field_str(label);
+  return v && !strcmp(v, "ON");
+}
+
+static void publish(void) {
+  struct tci_radio_state s;
+  const char *mode = field_str("MODE");
+  s.freq = field_int("FREQ");
+  s.mode = tci_mode_of(mode ? mode : "USB");
+  s.tx = in_tx != 0;
+  s.drive = field_int("DRIVE");
+  // while muted, the level MUTE OFF goes back to, so a program's volume
+  // control doesn't drop to the bottom
+  s.volume = audio_muted && premute_volume[0] ? atoi(premute_volume) : field_int("AUDIO");
+  s.mute = on_off("MUTE");
+  s.rit_on = on_off("RIT");
+  s.rit = field_int("RIT_DELTA");
+  s.wpm = field_int("WPM");
+  s.dbm = strength_dbm();
+  pthread_mutex_lock(&state_lock);
+  published = s;
+  snprintf(published_mode, sizeof(published_mode), "%s", mode ? mode : "USB");
+  pthread_mutex_unlock(&state_lock);
+}
+
+static void follow_settings(void) {
+  static int port_in_use;
+  static long long retry_at;
+  int want = on_off("TCI");
+  int port = field_int("TCI_PORT");
+  if (tci_running() && (!want || port != port_in_use))
+    tci_stop();
+  if (want && !tci_running() && now_ms() >= retry_at) {
+    publish(); // so the first client gets the state as it is
+    if (tci_init("", port, TCI_DEFAULT_MAX_CLIENTS) == 0) {
+      port_in_use = port;
+    } else {
+      printf("tci: can't listen on port %d - trying again in %d s\n", port, RETRY_MS / 1000);
+      retry_at = now_ms() + RETRY_MS;
+    }
+  }
+}
+
+void tci_sbitx_tick(void) {
+  static int ticks;
+  ticks++;
+  if (ticks % SETTINGS_TICKS == 0)
+    follow_settings();
+  if (ticks % PUBLISH_TICKS == 0 && tci_running())
+    publish();
+}
+
+/* ---- The audio thread ---------------------------------------------------------- */
+
+void tci_sbitx_rx_block(const int32_t *speaker, const double *i, const double *q, int n) {
+  static struct decim48k_state dec;
+  static const double zeros[BLOCK_MAX];
+  double audio[BLOCK_MAX / 2 + 1];
+  int m = 0;
+  if (!tci_running())
+    return;
+  if (n > BLOCK_MAX)
+    n = BLOCK_MAX;
+  for (int k = 0; k < n; k++) {
+    double x = speaker ? speaker[k] / 2147483648.0 : 0.0;
+    double y;
+    if (decim48k_apply(&dec, x, &y))
+      audio[m++] = y;
+  }
+  tci_push_audio_rx(audio, m);
+  tci_push_iq(i ? i : zeros, q ? q : zeros, n);
+}
