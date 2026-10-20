@@ -155,8 +155,8 @@ enum _mode {
 	MODE_AM,
 	MODE_FT8,
 	MODE_FT4,
-	MODE_PSK31,
-	MODE_RTTY,
+	MODE_UNUSED_8,	// numbers saved in user_settings.ini's band stacks:
+	MODE_UNUSED_9,	// these two load as USB
 	MODE_DIGITAL,
 	MODE_2TONE,
 	MAX_MODES = MODE_2TONE + 1,
@@ -209,7 +209,6 @@ void sdr_modulation_update(int32_t *samples, int count, double scale_up);
 
 /* from modems.c */
 void modem_rx(int mode, int32_t *samples, int count);
-void modem_set_pitch(int pitch, int mode);
 void modem_init();
 int get_tx_data_byte(char *c);
 int	get_tx_data_length();
