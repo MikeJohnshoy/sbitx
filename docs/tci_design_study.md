@@ -215,7 +215,7 @@ WSJT-X on the loopback and JTDX on TCI can both receive at once.
 
 ## 7. Settings
 
-- `TCI` ON or OFF, **OFF by default**, and `TCI_PORT`, **50001** by
+- `TCI` ON or OFF, **ON by default**, and `TCI_PORT`, **50001** by
   default (1024-65535), Hamlib's and ExpertSDR3's default. They are
   off-screen fields (`#tci`, `#tci_port`), kept in `user_settings.ini`
   like sbitx's other settings, and set with `\tci on`, `\tci off` and
@@ -306,7 +306,8 @@ styles, whose numbering style files and the web UI rely on.
 ## 10. Decisions taken
 
 1. **Transport:** `tci_ws.c` from maxibitx, not the web UI's mongoose.
-2. **Port 50001**, and **off unless enabled**.
+2. **Port 50001**, and **on by default**: it listens from start-up
+   unless turned off with `\tci off`, which is saved like any setting.
 3. **Modes:** USB, LSB, CW, CWR and DIGI (TCI's `digu`); DIGI is the
    wideband setting for FT8, AM, FM and the rest done by an external
    program. sbitx's own FT8, FT4, AM and FM read as `digu`, and in them
