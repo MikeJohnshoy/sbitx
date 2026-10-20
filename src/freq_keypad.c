@@ -48,6 +48,7 @@ extern int           screen_width, screen_height;
 extern struct field *get_field(const char *cmd);
 extern int           set_field(const char *id, const char *value);
 extern void          update_field(struct field *f);
+extern int           local_tuning_locked(void);
 extern void          invalidate_rect(int x, int y, int width, int height);
 
 #define KEYPAD_POSITION_FILE "/home/pi/sbitx/data/keypad_position.txt"
@@ -88,6 +89,7 @@ static void keypad_tune_and_close(KeypadData *kd, const char *khz_str)
     if (!khz_str || khz_str[0] == '\0') return;
     long khz = atol(khz_str);
     if (khz <= 0) return;
+    if (local_tuning_locked()) return; // VFO LOCK
 
     /* r1:freq is stored in Hz */
     char hz_buf[32];
