@@ -958,7 +958,7 @@ struct field main_controls[] = {
 	{"#snap", NULL, 1000, -1000, 40, 40, "SNAP", 40, "", FIELD_BUTTON, STYLE_FIELD_VALUE,
    	"", 0, 0, 0, COMMON_CONTROL},
 	// the TCI server (tci_sbitx.c), for JTDX, WSJT-X Improved, loggers and panadapters
-	{"#tci", NULL, 1000, -1000, 40, 40, "TCI", 40, "OFF", FIELD_TOGGLE, STYLE_FIELD_VALUE,
+	{"#tci", NULL, 1000, -1000, 40, 40, "TCI", 40, "ON", FIELD_TOGGLE, STYLE_FIELD_VALUE,
 	 "ON/OFF", 0, 0, 0, 0},
 	{"#tci_port", NULL, 1000, -1000, 40, 40, "TCI_PORT", 40, "50001", FIELD_NUMBER, STYLE_FIELD_VALUE,
 	 "", 1024, 65535, 1, 0},
