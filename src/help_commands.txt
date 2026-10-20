@@ -190,7 +190,9 @@ first; on an external keyboard type \ directly. Press Enter to execute.
   such as sdrOxide) control the radio and receive its audio and I/Q over the
   network, with no audio cable or CAT port to set up. Up to four programs at
   once. In the program, choose TCI and enter the sBitx's address and the port
-  (\tci_port). TCI doesn't transmit yet. Default: on
+  (\tci_port). Once a program sets the frequency, VFO Lock comes on so the
+  radio's own controls don't retune under it (see VFOLK). TCI doesn't
+  transmit yet. Default: on
 
 * \tci_port [1024-65535]
   The network port the TCI server listens on. Default: 50001
@@ -544,9 +546,14 @@ the spectrum display, waterfall appearance, and advanced hardware options.
   Cannot be enabled simultaneously with AUTOSCOPE.
 
 * VFOLK [on|off]
-  VFO Lock. When ON, the VFO frequency is locked and cannot be changed by
-  accidentally turning the encoder knob or scrolling the mouse wheel.
+  VFO Lock. When ON, the frequency can't be changed from the radio itself:
+  not by the encoder knob, the mouse wheel, a click or drag on the spectrum,
+  the frequency keypad, the band and band-stack controls, or VFO A/B. Typed
+  commands, the web UI, rigctld and TCI programs can still tune. With RIT
+  on, the knob still moves RIT.
   Use this during a net or when you need to stay exactly on frequency.
+  When a TCI program sets the frequency, VFO Lock comes on by itself (shown
+  as VFO LOCK - TCI) and goes off when the program disconnects.
   Unlock by pressing VFOLK again or typing \vfolk off in the command field.
 
 * WFCALLOPT [on|off]
