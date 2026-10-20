@@ -62,6 +62,9 @@ The initial sync between the gui values, the core radio values, settings, et al 
 #include <time.h>
 #include "cessb.h"
 #include "freq_keypad.h"
+#include "tci.h"
+#include "tci_sbitx.h"
+#include <pthread.h>
 #include "panadapter_fft.h"
 #include "panadapter_redraw.h"
 #include "panadapter_renderer.h"
@@ -804,7 +807,7 @@ static int tx_mod_max = 0;
 
 // must be in sync with enum _mode in sdr.h
 char *mode_name[MAX_MODES] = {
-	"USB", "LSB", "CW", "CWR", "FM", "AM", "FT8", "FT4", "PSK31", "RTTY",
+	"USB", "LSB", "CW", "CWR", "FM", "AM", "FT8", "FT4", "", "",
 	"DIGI", "2TONE"};
 
 static int serial_fd = -1;
@@ -954,6 +957,11 @@ struct field main_controls[] = {
 	 "ON/OFF", 0, 0, 0, 0},
 	{"#snap", NULL, 1000, -1000, 40, 40, "SNAP", 40, "", FIELD_BUTTON, STYLE_FIELD_VALUE,
    	"", 0, 0, 0, COMMON_CONTROL},
+	// the TCI server (tci_sbitx.c), for JTDX, WSJT-X Improved, loggers and panadapters
+	{"#tci", NULL, 1000, -1000, 40, 40, "TCI", 40, "OFF", FIELD_TOGGLE, STYLE_FIELD_VALUE,
+	 "ON/OFF", 0, 0, 0, 0},
+	{"#tci_port", NULL, 1000, -1000, 40, 40, "TCI_PORT", 40, "50001", FIELD_NUMBER, STYLE_FIELD_VALUE,
+	 "", 1024, 65535, 1, 0},
 
 	// Band Stuff.
 	{"r1:mode", do_mode_dropdown, 5, 5, 40, 40, "MODE", 40, "USB", FIELD_DROPDOWN, STYLE_FIELD_VALUE,
@@ -2418,10 +2426,6 @@ static int mode_id(const char *mode_str)
 		return MODE_FT8;
 	else if (!strcmp(mode_str, "FT4"))
 		return MODE_FT4;
-	else if (!strcmp(mode_str, "PSK31"))
-		return MODE_PSK31;
-	else if (!strcmp(mode_str, "RTTY"))
-		return MODE_RTTY;
 	else if (!strcmp(mode_str, "FM"))
 		return MODE_FM;
 	else if (!strcmp(mode_str, "AM"))
@@ -2784,6 +2788,14 @@ static int get_band_stack_index(const char *p_value)
 	return ix;
 }
 
+// A band stack's saved mode number, or USB for a number no mode has now
+static int stack_mode(int m)
+{
+	if (m < 0 || m >= MAX_MODES || m == MODE_UNUSED_8 || m == MODE_UNUSED_9)
+		return MODE_USB;
+	return m;
+}
+
 static int user_settings_handler(void *user, const char *section,
 								 const char *name, const char *value)
 {
@@ -2933,13 +2945,13 @@ static int user_settings_handler(void *user, const char *section,
 		else if (!strcmp(name, "freq3"))
 			band_stack[band].freq[3] = atoi(value);
 		else if (!strcmp(name, "mode0"))
-			band_stack[band].mode[0] = atoi(value);
+			band_stack[band].mode[0] = stack_mode(atoi(value));
 		else if (!strcmp(name, "mode1"))
-			band_stack[band].mode[1] = atoi(value);
+			band_stack[band].mode[1] = stack_mode(atoi(value));
 		else if (!strcmp(name, "mode2"))
-			band_stack[band].mode[2] = atoi(value);
+			band_stack[band].mode[2] = stack_mode(atoi(value));
 		else if (!strcmp(name, "mode3"))
-			band_stack[band].mode[3] = atoi(value);
+			band_stack[band].mode[3] = stack_mode(atoi(value));
 		else if (!strcmp(name, "gain"))
 			band_stack[band].if_gain = atoi(value);
 		else if (!strcmp(name, "drive"))
@@ -6560,14 +6572,20 @@ int do_waterfall(struct field *f, cairo_t *gfx, int event, int a, int b, int c)
 	return 0;
 }
 
+// Commands from the web UI, HPSDR, TCI and the 8081 console, each on its own
+// thread, run by ui_tick() on the GTK thread. The lock keeps each command
+// whole in the queue.
+static pthread_mutex_t remote_lock = PTHREAD_MUTEX_INITIALIZER;
+
 void remote_execute(char *cmd)
 {
-
+	pthread_mutex_lock(&remote_lock);
 	if (q_remote_commands.overflow)
 		q_empty(&q_remote_commands);
 	while (*cmd)
 		q_write(&q_remote_commands, *cmd++);
 	q_write(&q_remote_commands, 0);
+	pthread_mutex_unlock(&remote_lock);
 }
 
 void call_wipe()
@@ -6840,7 +6858,6 @@ int do_pitch(struct field *f, cairo_t *gfx, int event, int a, int b, int c)
 		update_field(f);
 		panadapter_redraw_field_updated(&panadapter_redraw_state, f->label);
 		int mode = mode_id(get_field("r1:mode")->value);
-		modem_set_pitch(v, mode);
 		char buff[20], response[20];
 		sprintf(buff, "rx_pitch=%d", v);
 		sdr_request(buff, response);
@@ -6896,7 +6913,6 @@ int do_bandwidth(struct field *f, cairo_t *gfx, int event, int a, int b, int c)
 		update_field(f);
 /*					RLB  fixed do_bandwidth changing rx+pitch
 		int mode = mode_id(get_field("r1:mode")->value);
-		modem_set_pitch(v, mode);
 		char buff[20], response[20];
 		sprintf(buff, "rx_pitch=%d", v);
 		sdr_request(buff, response);
@@ -8259,11 +8275,6 @@ int do_macro(struct field *f, cairo_t *gfx, int event, int a, int b, int c) {
     macro_exec(fn_key, buff);
     mode = get_field("r1:mode")->value;
 
-    // add the end of transmission to the expanded buffer for the fldigi modes
-    if (!strcmp(mode, "RTTY") || !strcmp(mode, "PSK31")) {
-      strcat(buff, "^r");
-      tx_on(TX_SOFT);
-    }
     if (!strncmp(mode, "FT", 2) && strlen(buff)) {
       ft8_tx(buff, atoi(get_field("#tx_pitch")->value));
       set_field("#text_in", "");
@@ -10562,18 +10573,25 @@ gboolean ui_tick(gpointer gook)
 	if (in_tx && (ticks % vswr_check_tick_interval) == 0)
  		check_and_handle_vswr(vswr);
  
-	while (q_length(&q_remote_commands) > 0)
+	for (;;)
 	{
-		// read each command until the
+		// take one command from the queue, then run it without the lock
 		char remote_cmd[1000];
 		int c, i;
+		pthread_mutex_lock(&remote_lock);
+		if (q_length(&q_remote_commands) <= 0)
+		{
+			pthread_mutex_unlock(&remote_lock);
+			break;
+		}
 		for (i = 0; i < sizeof(remote_cmd) - 2 && (c = q_read(&q_remote_commands)) > 0; i++)
 		{
 			remote_cmd[i] = c;
 		}
+		pthread_mutex_unlock(&remote_lock);
 		remote_cmd[i] = 0;
 
-		// echo the keystrokes for chatty modes like cw/rtty/psk31/etc
+		// echo the keystrokes for chatty modes like cw
 		if (!strncmp(remote_cmd, "key ", 4))
 			for (int i = 4; remote_cmd[i] > 0; i++)
 				edit_field(get_field("#text_in"), remote_cmd[i]);
@@ -10583,6 +10601,8 @@ gboolean ui_tick(gpointer gook)
 			settings_updated = 1; // save the settings
 		}
 	}
+
+	tci_sbitx_tick();
 
 	if (panadapter_redraw_tick(&panadapter_redraw_state))
 		update_field(get_field("spectrum"));
@@ -12280,6 +12300,17 @@ else if (!strcasecmp(exec, "decode"))
 		set_radio_mode(args);
 		update_field(get_field("r1:mode"));
 	}
+	// setfield <field id> <value>: sets a field as the screen would, without
+	// moving the focus to it (for TCI)
+	else if (!strcasecmp(exec, "setfield"))
+	{
+		char *value = strchr(args, ' ');
+		if (value)
+		{
+			*value++ = 0;
+			set_field(args, value);
+		}
+	}
   else if (!strcasecmp(exec, "cwreverse"))
   {
     extern bool cw_reverse;  // declared in modem_cw.c
@@ -12962,6 +12993,9 @@ void cleanup_on_exit() {
 
 	// Close WSJT-X broadcast socket
 	udp_broadcast_close();
+
+	// Disconnect TCI's clients
+	tci_stop();
 
 	clear_ftx_rules();
 
