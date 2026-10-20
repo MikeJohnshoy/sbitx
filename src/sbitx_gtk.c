@@ -93,6 +93,9 @@ int eptt_enabled = 0;
 int comp_enabled = 0;
 int input_volume = 0;
 int vfo_lock_enabled = 0;
+// cmd_exec() depth on this thread: commands (the web UI, the consoles,
+// rigctld, TCI) tune even under VFO LOCK, which holds only local controls
+static __thread int commanded;
 int has_ina260 = 0;
 // MUTE button state: audio_muted tracks whether MUTE is engaged, and
 // premute_volume stores the AUDIO level to restore when un-muting. - added mute control
@@ -4703,7 +4706,7 @@ void draw_spectrum(struct field *f_spectrum, cairo_t *gfx)
 	cairo_show_text(gfx, anr_text);
 
 	// --- VFO LOCK indicator W2JON
-	const char *vfolk_text = "VFO LOCK";
+	const char *vfolk_text = tci_sbitx_has_dial() ? "VFO LOCK - TCI" : "VFO LOCK";
 	cairo_set_font_size(gfx, STYLE_LARGE_VALUE);
 
 	// Check the vfo_lock_enabled variable and set the text color
@@ -6056,6 +6059,21 @@ static void hover_field(struct field *f)
 	update_field(f);
 }
 
+// VFO LOCK on or off at once (check_plugin_controls() also follows the
+// field, every 500 ms)
+void set_vfo_lock(int on)
+{
+	set_field("#vfo_lock", on ? "ON" : "OFF");
+	vfo_lock_enabled = on;
+}
+
+// Nonzero when VFO LOCK should stop a retune from the knob, the mouse, the
+// spectrum, the keypad or the band controls: on, and not inside a command
+int local_tuning_locked(void)
+{
+	return vfo_lock_enabled && !commanded;
+}
+
 // respond to a UI request to change the field value
 static void edit_field(struct field *f, int action)
 {
@@ -6072,6 +6090,8 @@ static void edit_field(struct field *f, int action)
 		if (f->fn(f, NULL, FIELD_EDIT, action, 0, 0))
 			return;
 	}
+	if (!strcmp(f->cmd, "#band") && local_tuning_locked())
+		return;
 
 	if (f->value_type == FIELD_NUMBER)
 	{
@@ -6463,6 +6483,8 @@ int do_spectrum(struct field *f, cairo_t *gfx, int event, int a, int b, int c)
 		return 1;
 		break;
 	case GDK_MOTION_NOTIFY:
+		if (local_tuning_locked())
+			return 1;
 		f_freq = get_field("r1:freq");
 		freq = atoi(f_freq->value);
 		span = spectrum_display_span_hz();
@@ -6479,6 +6501,8 @@ int do_spectrum(struct field *f, cairo_t *gfx, int event, int a, int b, int c)
 	case GDK_BUTTON_PRESS:
 		if (c == GDK_BUTTON_PRIMARY || c == GDK_BUTTON_SECONDARY)
 		{ // tap or right click to QSY
+			if (local_tuning_locked())
+				return 1;
 			drag_remainder = 0;
 			f_freq = get_field("r1:freq");
 			freq = atoi(f_freq->value);
@@ -7016,7 +7040,7 @@ int do_tuning(struct field *f, cairo_t *gfx, int event, int a, int b, int c) {
     }
 
     // normal VFO tuning with possible acceleration
-    if (vfo_lock_enabled != 0) {
+    if (local_tuning_locked()) {
       return 1; // avoid unnecessary updates when locked
     }
 
@@ -7686,6 +7710,9 @@ int do_mode_dropdown(struct field *f, cairo_t *gfx, int event, int a, int b, int
 
 int do_band_stack_position(struct field *f, cairo_t *gfx, int event, int a, int b, int c)
 {
+	if ((event == GDK_BUTTON_PRESS || event == FIELD_EDIT) && local_tuning_locked())
+		return 1;
+
 	// Get current band based on frequency
 	struct field *freq_field = get_field("r1:freq");
 	if (!freq_field)
@@ -10526,8 +10553,8 @@ void handleButton2Press()
 			if (difftime(currentTime, buttonPressTimeSW2) >= 1)
 			{
 				// Long press detected - Enable/Disable VFO lock
-				vfoLock = !vfoLock;
-				field_set("VFOLK", vfoLock ? "ON" : "OFF");
+				vfoLock = !vfo_lock_enabled; // TCI may have turned it on
+				set_vfo_lock(vfoLock);
 				// printf("VFOLock: %d\n", vfoLock);
 
 				if (vfoLock == 1)
@@ -11109,6 +11136,8 @@ static void set_ftx_frequency(int mode)
 	if (mode != MODE_FT4 && mode != MODE_FT8) {
 		return; // Only applies to FT4/FT8 modes
 	}
+	if (local_tuning_locked())
+		return;
 
 	struct field *freq_field = get_field("r1:freq");
 	if (!freq_field) {
@@ -11188,6 +11217,9 @@ void change_band(char *request)
 	long new_freq, old_freq;
 	char buff[100];
 	char band_name[10];
+
+	if (local_tuning_locked())
+		return;
 
 	// Make a local copy to avoid modifying string literals
 	strncpy(band_name, request, sizeof(band_name) - 1);
@@ -11618,7 +11650,12 @@ void do_control_action(char *cmd)
 		struct field *vfo = get_field("#vfo");
 		struct field *vfo_a = get_field("#vfo_a_freq");
 		struct field *vfo_b = get_field("#vfo_b_freq");
-		if (!strcmp(vfo->value, "B"))
+		if (!strcmp(vfo->value, "B") && local_tuning_locked())
+		{
+			strcpy(vfo->value, "A"); // VFO LOCK: stay on A
+			update_field(vfo);
+		}
+		else if (!strcmp(vfo->value, "B"))
 		{
 			strcpy(vfo_a->value, f->value);
 			set_field("r1:freq", vfo_b->value);
@@ -11631,7 +11668,12 @@ void do_control_action(char *cmd)
 		struct field *vfo = get_field("#vfo");
 		struct field *vfo_a = get_field("#vfo_a_freq");
 		struct field *vfo_b = get_field("#vfo_b_freq");
-		if (!strcmp(vfo->value, "A"))
+		if (!strcmp(vfo->value, "A") && local_tuning_locked())
+		{
+			strcpy(vfo->value, "B"); // VFO LOCK: stay on B
+			update_field(vfo);
+		}
+		else if (!strcmp(vfo->value, "A"))
 		{
 			strcpy(vfo_b->value, f->value);
 			set_field("r1:freq", vfo_a->value);
@@ -11969,9 +12011,17 @@ void initialize_macro_selection() {
 	like metercal or txcal, etc.
   Note: Now updated to allow lower case text input
 */
+static void run_cmd(char *cmd);
+
 void cmd_exec(char *cmd)
 {
+	commanded++;
+	run_cmd(cmd);
+	commanded--;
+}
 
+static void run_cmd(char *cmd)
+{
 	//printf( "cmd_exec called with command: %s\n", cmd); // Debug logging
 	int i, j;
 	int mode = mode_id(get_field("r1:mode")->value);
