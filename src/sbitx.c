@@ -27,6 +27,7 @@
 #include "hpsdr_p1.h"  // demonstrates using I and Q for other uses
 #include "squelch.h"   // FM squelch gate
 #include "panadapter_fft.h"
+#include "tci_sbitx.h"   // TCI's receive audio and I/Q
 
 // ---------------------------------------------------------------------------
 // CTCSS (sub-audible tone) for FM mode
@@ -2240,6 +2241,9 @@ void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speake
         // tx_process continues to operate on real samples for now
         tx_process(input_rx, input_mic, output_speaker, output_tx, n_samples);
 
+        // TCI's receive streams go on, silent, while transmitting
+        tci_sbitx_rx_block(NULL, NULL, NULL, MAX_BINS / 2);
+
     } else {
         // generate I and Q data from the real input before passing samples to rx_linear()
         // Note: this also downconverts to baseband
@@ -2278,6 +2282,10 @@ void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speake
     // this is an example showing data being passed to an
     // experimental HPSDR Protocol 1 interface
     hpsdr_send_iq(filt_q, filt_i, MAX_BINS / 2);
+
+    // TCI's receive audio (the demodulated audio, before the volume
+    // control) and its I/Q
+    tci_sbitx_rx_block(output_speaker, filt_i, filt_q, MAX_BINS / 2);
   }
 
 	if (pf_record) {
@@ -2909,7 +2917,7 @@ void sdr_request(char *request, char *response)
 		if (in_tx)
 			set_tx_power_levels();
 		/* USB mic is only active in voice modes (LSB, USB, AM).
-		   All other modes — CW, CWR, FT8, FT4, DIGI, RTTY, 2TONE, FM —
+		   All other modes — CW, CWR, FT8, FT4, DIGI, 2TONE, FM —
 		   either use the loopback, keyer, or no mic at all. */
 		if (usb_audio_play_device[0]
 		    && (rx_list->mode == MODE_LSB
