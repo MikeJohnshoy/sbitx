@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <!--
@@ -614,10 +613,6 @@
                         <button class="sbitxv3-btn" id="xpra_launch_cw" type="button">Apps</button>
                         <button class="sbitxv3-btn" id="menu-open2">Menu</button>
                     </div>
-                </div>
-                <div id="data_chat">
-                    <button id="data_chat_tx">TX</button>
-                    <button id="data_chat_rx">RX</button>
                 </div>
 
             </section>
@@ -3573,14 +3568,7 @@
         if (document.location.hostname == "127.0.0.1")
             el("keybd").style.display = "block";
         text_focus = el("data_window");
-        if (mode == 'RTTY' || mode == 'PSK31') {
-            $("#data_chat").show();
-            $("#cw_settings").hide();
-        }
-        else {
-            $("#data_chat").hide();
-            $("#cw_settings").show();
-        }
+        $("#cw_settings").show();
         var b = $("body");
         if (b.height() > 600)
             el("data_window").styleheight = 50;
@@ -3593,8 +3581,7 @@
         //we changed this from being an evernt handler
         //var c = event.key;
 
-        if (el("MODE").value != "CW" && el("MODE").value == "CWR" &&
-            el("MODE").value != "PSK31" && el("MODE").value != "RTTY")
+        if (el("MODE").value != "CW" && el("MODE").value == "CWR")
             return;
 
         if (c == "Shift" || c == "Alt") {
@@ -3627,16 +3614,6 @@
            return;
         text_done.innerHTML = text_done.innerHTML + deco_to_span(text);
         rx_window.scrollTop = rx_window.scrollHeight;
-    }
-
-    function data_tx(event) {
-        websocket_send("t ");
-        text_focus = el("data_window");
-    }
-
-    function data_rx(event) {
-        websocket_send("r ");
-        el("data_window").focus;
     }
 
     /* console functionality */
@@ -4686,8 +4663,6 @@
     $("#start_login").on("click", do_login);
     //cw buttons, also used for chatty data
     $("#data_window").on("click", cw_input_focus);
-    $("#data_chat_tx").on("click", data_tx);
-    $("#data_chat_rx").on("click", data_rx);
     //$(".sbitxv3-slider").on("click", toggle_slider);
     //ssb buttons
     $("#xpra_launch_digi, #xpra_launch_cw, #xpra_launch_ft8, #xpra_launch_voice").on("click", function() {
