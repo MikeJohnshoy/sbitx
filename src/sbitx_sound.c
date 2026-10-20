@@ -1219,9 +1219,9 @@ int sound_loop(){
 
 		// ---- Optional USB mic input ----
 		// Only replace input_q[] with USB mic samples when NOT in virtual-cable
-		// (loopback) mode.  In DIGI/PSK/RTTY modes use_virtual_cable=1 and
-		// input_q[] is already sourced from the fldigi loopback queue -- the
-		// USB mic must not overwrite it or those modes will stop working.
+		// (loopback) mode.  In DIGI mode use_virtual_cable=1 and input_q[]
+		// is already sourced from the loopback queue -- the USB mic must not
+		// overwrite it or DIGI will stop working.
 		if (usb_audio_cap_handle && !use_virtual_cable) {
 			static int32_t hcap_buf[2048]; // stereo 48kHz frame buffer
 			int hframes = ret_card / 2;    // half the SDR frame count
