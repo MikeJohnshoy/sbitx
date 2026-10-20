@@ -14,7 +14,9 @@
 // ExpertSDR3, which JTDX keys its TCI behaviour to, and as device sbitx.
 //
 // One receiver, one VFO: vfo channel B and dds report channel A's
-// frequency, if is always 0. RIT is reported but not set over TCI: a set
+// frequency, if is always 0. The first client to set the frequency takes
+// the radio's dial (tci_radio_hold_dial()) until every client that has set
+// it has gone. RIT is reported but not set over TCI: a set
 // is answered with the value in force. XIT, split, tune and the DSP
 // switches report off. Changes made elsewhere (the screen, the knobs, the
 // web UI, rigctld) have no notification, so a service thread samples the
@@ -47,6 +49,7 @@
 
 struct client {
   int in_use, id;
+  int has_dial; // has set the frequency
   struct tci_stream_cfg cfg;
   int buffering_ms;
   int rx_sensors, rx_sensors_ms;
@@ -227,6 +230,31 @@ static int parse_int(const char *s, long long *v) {
 
 static void apply_stream(int slot) { tci_stream_set(slot, &clients[slot].cfg); }
 
+static int dial_holders(void) {
+  int n = 0;
+  for (int s = 0; s < WS_MAX_CLIENTS; s++)
+    n += clients[s].in_use && clients[s].has_dial;
+  return n;
+}
+
+static void set_freq(int slot, int hz) {
+  if (!clients[slot].has_dial) {
+    clients[slot].has_dial = 1;
+    if (dial_holders() == 1)
+      tci_radio_hold_dial(1);
+  }
+  tci_radio_set_freq(hz);
+}
+
+// Before the client's slot is freed.
+static void release_dial(int slot) {
+  if (clients[slot].has_dial) {
+    clients[slot].has_dial = 0;
+    if (dial_holders() == 0)
+      tci_radio_hold_dial(0);
+  }
+}
+
 // Replies with a fixed "off" state to a per-receiver switch sbitx doesn't
 // offer over TCI.
 static const char *const fixed_off[] = {
@@ -279,7 +307,7 @@ static void handle(int slot, char *cmd) {
     parse_int(argv[1], &ch);
     if (argc >= 3) {
       if (ch == 0 && parse_int(argv[2], &v) && v >= TCI_VFO_MIN && v <= TCI_VFO_MAX)
-        tci_radio_set_freq((int)v);
+        set_freq(slot, (int)v);
       tci_radio_get(&s);
       pub_freq(&s); // echo, with the frequency in force
     } else {
@@ -289,7 +317,7 @@ static void handle(int slot, char *cmd) {
   } else if (!strcmp(name, "dds") && trx0) {
     if (argc >= 2) {
       if (parse_int(argv[1], &v) && v >= TCI_VFO_MIN && v <= TCI_VFO_MAX)
-        tci_radio_set_freq((int)v);
+        set_freq(slot, (int)v);
       tci_radio_get(&s);
       pub_freq(&s);
     } else {
@@ -563,6 +591,7 @@ static void on_close(int id) {
   pthread_mutex_lock(&lock);
   if (clients[slot].in_use && clients[slot].id == id) {
     tci_stream_close(slot);
+    release_dial(slot);
     clients[slot].in_use = 0;
     printf("tci: client %d disconnected\n", slot);
   }
@@ -638,6 +667,14 @@ void tci_stop(void) {
   ws_server_stop();
   atomic_store(&running, 0);
   pthread_join(service_thread, NULL);
+  pthread_mutex_lock(&lock); // any client whose reader didn't finish in time
+  for (int s = 0; s < WS_MAX_CLIENTS; s++) {
+    if (clients[s].in_use) {
+      release_dial(s);
+      clients[s].in_use = 0;
+    }
+  }
+  pthread_mutex_unlock(&lock);
   printf("tci: stopped\n");
 }
 
