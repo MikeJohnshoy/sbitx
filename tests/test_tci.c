@@ -6,7 +6,8 @@
 // asker alone, setting frequency, mode, drive, volume, mute and CW speed,
 // RIT refused with the state in force, a change made elsewhere reaching
 // every client, several commands to a message, the client limit, the
-// receive audio and I/Q streams (I and Q as given), transmit - who holds
+// receive audio and I/Q streams (I and Q as given), CW text (cw_macros and
+// cw_macros_stop reaching the radio, the text as sent), transmit - who holds
 // TX, the client's own audio through TX_CHRONO, a trx the radio refuses,
 // release on trx false, disconnect, TX ending elsewhere and stopping - stopping and starting
 // again, and decim48k's and upsample48k's response. The harness plays the
@@ -82,6 +83,20 @@ int tci_radio_set_tx(int on, int own_audio) {
   }
   pthread_mutex_unlock(&radio_lock);
   return refused ? -1 : 0;
+}
+
+static char cw_text[600];
+static int cw_texts, cw_stops;
+void tci_radio_cw_text(const char *text) {
+  pthread_mutex_lock(&radio_lock);
+  snprintf(cw_text, sizeof(cw_text), "%s", text);
+  cw_texts++;
+  pthread_mutex_unlock(&radio_lock);
+}
+void tci_radio_cw_stop(void) {
+  pthread_mutex_lock(&radio_lock);
+  cw_stops++;
+  pthread_mutex_unlock(&radio_lock);
 }
 
 static int tx_calls_now(void) {
@@ -553,6 +568,56 @@ static void test_limit(void) {
   usleep(200000);
 }
 
+static void test_cw_text(void) {
+  printf("CW text\n");
+  int fd = quick_connect();
+  if (fd < 0) {
+    CHECK(0, "a client");
+    return;
+  }
+  drain(fd, 100);
+  static const struct {
+    const char *sent, *text;
+  } cases[] = {{"cw_macros:0,CQ TEST DE KB2ML;", "CQ TEST DE KB2ML"},
+               {"CW_MACROS:0,|SK| <5NN>;", "|SK| <5NN>"},
+               {"cw_macros:0, TU  ;", "TU"},
+               {"cw_macros:0,5NN, TU;", "5NN,TU"},
+               {"cw_macros:0,a^b~c*d;", "a^b~c*d"}};
+  for (size_t k = 0; k < sizeof(cases) / sizeof(cases[0]); k++) {
+    pthread_mutex_lock(&radio_lock);
+    int before = cw_texts;
+    pthread_mutex_unlock(&radio_lock);
+    send_text(fd, cases[k].sent);
+    long long end = now_ms() + 500;
+    int got = 0;
+    while (!got && now_ms() < end) {
+      pthread_mutex_lock(&radio_lock);
+      got = cw_texts > before && !strcmp(cw_text, cases[k].text);
+      pthread_mutex_unlock(&radio_lock);
+      usleep(5000);
+    }
+    CHECK(got, "%s gives the text \"%s\"", cases[k].sent, cases[k].text);
+  }
+  pthread_mutex_lock(&radio_lock);
+  int before = cw_texts;
+  pthread_mutex_unlock(&radio_lock);
+  send_text(fd, "cw_macros:1,X;");
+  send_text(fd, "cw_macros:0;");
+  usleep(200000);
+  pthread_mutex_lock(&radio_lock);
+  CHECK(cw_texts == before, "another transceiver's, or none, is ignored");
+  int stops = cw_stops;
+  pthread_mutex_unlock(&radio_lock);
+  send_text(fd, "cw_macros_stop;");
+  usleep(200000);
+  pthread_mutex_lock(&radio_lock);
+  CHECK(cw_stops == stops + 1, "cw_macros_stop stops it");
+  pthread_mutex_unlock(&radio_lock);
+  char got[512];
+  CHECK(collect(fd, 200, got, sizeof(got)) == 0, "none of them is answered");
+  close(fd);
+}
+
 static void test_streams(void) {
   printf("receive streams\n");
   int fd = quick_connect();
@@ -694,6 +759,7 @@ int main(void) {
   test_sets_and_echoes();
   test_changes_elsewhere();
   test_tx();
+  test_cw_text();
   test_limit();
   test_streams();
   test_restart(ws_test_port);
