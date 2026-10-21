@@ -29,7 +29,9 @@ TEST_SOURCES_dxcc = $(CLU_SOURCES)
 TEST_CFLAGS_dxcc = -Iclu/src $(GLIB_CFLAGS)
 TEST_EXTRA_LIBS_dxcc = $(GLIB_LIBS)
 TEST_SOURCES_tci = src/tci.c src/tci_stream.c src/tci_ws.c src/decim48k.c src/upsample48k.c
-TEST_SOURCES_tci_sbitx = src/tci_sbitx.c src/tci.c src/tci_stream.c src/tci_ws.c src/decim48k.c src/upsample48k.c
+TEST_SOURCES_modem_cw = src/modem_cw.c src/vfo.c
+TEST_CFLAGS_modem_cw = -Itests/stubs
+TEST_SOURCES_tci_sbitx = src/tci_sbitx.c src/tci_cw.c src/tci.c src/tci_stream.c src/tci_ws.c src/decim48k.c src/upsample48k.c
 
 $(TARGET): $(OBJECTS) ft8_lib/libft8.a
 	$(LINK) $(LFLAGS) -o $(TARGET) $(OBJECTS) $(FFTOBJ) $(LIBPATH) $(LIBS)
