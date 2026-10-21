@@ -41,4 +41,10 @@ void tci_radio_set_volume(int percent);
 void tci_radio_set_mute(int on);
 void tci_radio_set_wpm(int wpm);
 
+// Key (on) or unkey the transmitter for the client that holds TX. own_audio:
+// the client sends its audio (tci_stream.c); otherwise sbitx's usual audio
+// for the mode is used. Returns 0, or -1 if the radio refuses to key in its
+// present mode (unkeying is never refused).
+int tci_radio_set_tx(int on, int own_audio);
+
 #endif /* TCI_RADIO_H */
