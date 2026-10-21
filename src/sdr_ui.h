@@ -106,6 +106,8 @@ int console_extract_semantic(uint32_t row, sbitx_style sem, char *out, int outle
 int is_in_tx();
 void abort_tx();
 void remote_execute(char *command);
+int cw_text_append(const char *text);
+void cw_text_clear(void);
 int remote_update_field(int i, char *text);
 void web_get_spectrum(char *buff);
 void save_user_settings(int forced);
