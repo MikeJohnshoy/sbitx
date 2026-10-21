@@ -48,8 +48,7 @@ void tci_stream_tx_end(void);
 // queued for the audio thread; anything else is dropped.
 void tci_stream_tx_frame(int slot, const uint8_t *frame, size_t len);
 
-// The audio thread's side of transmit audio. sbitx doesn't call these yet:
-// tci.c doesn't grant TX (tci.h), so no client's audio is ever queued.
+// The audio thread's side of transmit audio (tci_sbitx.c).
 // tci_tx_audio_owned() is nonzero while a client holds TX with its own
 // audio; tci_pull_audio_tx() gives up to n samples at 48 kHz, +-1 full
 // scale, fewer (0 if none) rather than waiting; tci_tx_audio_idle()
