@@ -194,7 +194,11 @@ first; on an external keyboard type \ directly. Press Enter to execute.
   to TCI) is sent in USB, LSB, DIGI, FT8 and FT4, even with sBitx left in
   FT8 or FT4; in AM, FM, CW and CWR it is refused. JTDX's power slider
   sets DRIVE over TCI. While a program is connected, the top line of the
-  frequency display reads TCI CONTROL ON. Default: off
+  frequency display reads TCI CONTROL ON.
+  A logger's CW text over TCI (cw_macros, with prosigns such as |AR| and
+  |SK| and < > speed changes) is sent in CW and CWR through the TEXT field,
+  as sBitx's own macros are; closing the key or paddle stops it.
+  Default: off
 
 * \tci_port [1024-65535]
   The network port the TCI server listens on. Default: 50001
@@ -714,6 +718,8 @@ Use the TAB key to move between fields quickly during a QSO.
   Type \ here to enter the CMD mode for backslash commands.
   Use TAB to cycle focus through the LOG fields (CALL, SENT, RECV, EXCH, NR, TEXT).
   In CW mode, text typed here is sent as Morse when you press Enter.
+  In the text, [ sends what follows 5 WPM slower and ] 5 WPM faster,
+  until undone: TU [5NN] TU sends the 5NN slower.
 
 * WIPE
   Clears all data from the logger fields (CALL, SENT, RECV, EXCH, NR) at once.
