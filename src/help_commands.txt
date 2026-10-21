@@ -198,6 +198,9 @@ first; on an external keyboard type \ directly. Press Enter to execute.
   A logger's CW text over TCI (cw_macros, with prosigns such as |AR| and
   |SK| and < > speed changes) is sent in CW and CWR through the TEXT field,
   as sBitx's own macros are; closing the key or paddle stops it.
+  A panadapter such as sdrOxide tunes sBitx wherever you click in its
+  panorama, CW signals included; set its I/Q rate to 48 kHz, the width
+  sBitx receives.
   Default: off
 
 * \tci_port [1024-65535]
