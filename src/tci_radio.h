@@ -47,4 +47,10 @@ void tci_radio_set_wpm(int wpm);
 // present mode (unkeying is never refused).
 int tci_radio_set_tx(int on, int own_audio);
 
+// CW text (cw_macros), as the client sent it, after its transceiver
+// number: queued to be sent in order, in CW and CWR. And cw_macros_stop:
+// the text stops where it is.
+void tci_radio_cw_text(const char *text);
+void tci_radio_cw_stop(void);
+
 #endif /* TCI_RADIO_H */
