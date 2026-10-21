@@ -65,6 +65,7 @@ static int trace;                  // SBITX_TCI_TRACE: print every message
 static atomic_int running;
 static pthread_t service_thread;
 static atomic_int tx_owner = -1; // the slot that holds TX, or -1
+static atomic_int n_clients;      // connected
 
 static long long now_ms(void) {
   struct timespec ts;
@@ -248,6 +249,8 @@ static void cmd_trx(int slot, int on, const char *source) {
 }
 
 int tci_holds_tx(void) { return atomic_load(&tx_owner) >= 0; }
+
+int tci_client_count(void) { return atomic_load(&n_clients); }
 
 /* ---- Commands ------------------------------------------------------------- */
 
@@ -566,6 +569,7 @@ static void on_open(int id, const char *peer) {
   struct client *c = &clients[slot];
   memset(c, 0, sizeof(*c));
   c->in_use = 1;
+  atomic_fetch_add(&n_clients, 1);
   c->id = id;
   c->cfg.audio_rate = 48000;
   c->cfg.audio_type = TCI_FLOAT32;
@@ -613,6 +617,7 @@ static void on_close(int id) {
     }
     tci_stream_close(slot);
     clients[slot].in_use = 0;
+    atomic_fetch_sub(&n_clients, 1);
     printf("tci: client %d disconnected\n", slot);
   }
   pthread_mutex_unlock(&lock);
@@ -675,6 +680,7 @@ int tci_init(const char *bind_addr, int port, int max_clients) {
   tci_stream_init();
   memset(clients, 0, sizeof(clients));
   atomic_store(&tx_owner, -1);
+  atomic_store(&n_clients, 0);
   tci_radio_get(&pub);
   if (ws_server_start(bind_addr, port, max_clients, &cb) < 0)
     return -1;
@@ -694,11 +700,12 @@ void tci_stop(void) {
   ws_server_stop();
   atomic_store(&running, 0);
   pthread_join(service_thread, NULL);
-  pthread_mutex_lock(&lock); // in case the owner's reader didn't finish in time
+  pthread_mutex_lock(&lock); // in case a reader didn't finish in time
   if (atomic_load(&tx_owner) >= 0) {
     tci_radio_set_tx(0, 0);
     tx_release();
   }
+  atomic_store(&n_clients, 0);
   pthread_mutex_unlock(&lock);
   printf("tci: stopped\n");
 }
