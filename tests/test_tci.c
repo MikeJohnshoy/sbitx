@@ -4,15 +4,18 @@
 // loopback, with the radio stubbed (tci_radio.h): the initialization burst
 // and its form, echoes of every set to every client, reads answered to the
 // asker alone, setting frequency, mode, drive, volume, mute and CW speed,
-// RIT and transmit refused with the state in force, a change made elsewhere
-// reaching every client, several commands to a message, the client limit,
-// the receive audio and I/Q streams (I and Q as given), stopping and
-// starting again, and decim48k's response. The harness plays the audio
-// thread itself.
+// RIT refused with the state in force, a change made elsewhere reaching
+// every client, several commands to a message, the client limit, the
+// receive audio and I/Q streams (I and Q as given), transmit - who holds
+// TX, the client's own audio through TX_CHRONO, a trx the radio refuses,
+// release on trx false, disconnect, TX ending elsewhere and stopping - stopping and starting
+// again, and decim48k's and upsample48k's response. The harness plays the
+// audio thread itself.
 // Built and run by make test, as /tmp/sbitx-test_tci.
 
 #define _GNU_SOURCE
 #include "decim48k.h"
+#include "upsample48k.h"
 #include "tci.h"
 #include "tci_radio.h"
 #include "tci_stream.h"
@@ -67,6 +70,26 @@ void tci_radio_set_drive(int drive) { STUB_SET(drive, drive); }
 void tci_radio_set_volume(int percent) { STUB_SET(volume, percent); }
 void tci_radio_set_mute(int on) { STUB_SET(mute, on != 0); }
 void tci_radio_set_wpm(int wpm) { STUB_SET(wpm, wpm); }
+
+static int tx_calls, tx_own_audio, tx_refuse;
+int tci_radio_set_tx(int on, int own_audio) {
+  pthread_mutex_lock(&radio_lock);
+  int refused = on && tx_refuse;
+  if (!refused) {
+    radio.tx = on != 0;
+    tx_calls++;
+    tx_own_audio = own_audio;
+  }
+  pthread_mutex_unlock(&radio_lock);
+  return refused ? -1 : 0;
+}
+
+static int tx_calls_now(void) {
+  pthread_mutex_lock(&radio_lock);
+  int n = tx_calls;
+  pthread_mutex_unlock(&radio_lock);
+  return n;
+}
 
 static struct tci_radio_state radio_now(void) {
   struct tci_radio_state s;
@@ -322,8 +345,6 @@ static void test_sets_and_echoes(void) {
   int calls = set_calls;
   send_text(a, "rit_offset:0,100;");
   CHECK(expect(a, "rit_offset:0,0;", 500), "RIT isn't set: echoed with the offset in force");
-  send_text(a, "trx:0,true;");
-  CHECK(expect(a, "trx:0,false;", 500) && !radio_now().tx, "trx: doesn't transmit");
   send_text(a, "split_enable:true;");
   CHECK(expect(a, "split_enable:0,false;", 500), "split stays off");
   send_text(a, "xit_enable:0,true;");
@@ -370,6 +391,142 @@ static void test_changes_elsewhere(void) {
   CHECK(collect(a, 200, got, sizeof(got)) == 0, "nothing more while nothing changes");
   close(a);
   close(b);
+}
+
+// Waits up to ms for cond to become true.
+#define WAIT_FOR(cond, ms)                                                                         \
+  ({                                                                                               \
+    long long end_ = now_ms() + (ms);                                                              \
+    while (!(cond) && now_ms() < end_)                                                             \
+      usleep(5000);                                                                                \
+    (cond);                                                                                        \
+  })
+
+// A client's TX audio frame: frames stereo float32 frames, left[k] = f(k).
+static void send_tx_audio(int fd, int frames, float (*f)(int)) {
+  size_t len = TCI_HEADER_BYTES + (size_t)frames * 8;
+  uint8_t *b = calloc(1, len);
+  uint32_t hdr[8] = {0, 48000, TCI_FLOAT32, 0, 0, (uint32_t)(2 * frames), TCI_TX_AUDIO_STREAM, 2};
+  for (int k = 0; k < 8; k++)
+    for (int j = 0; j < 4; j++)
+      b[4 * k + j] = (uint8_t)(hdr[k] >> (8 * j));
+  for (int k = 0; k < frames; k++)
+    memcpy(b + TCI_HEADER_BYTES + 8 * k, &(float){f(k)}, 4);
+  send_frame(fd, 1, 2, b, len, 1);
+  free(b);
+}
+
+static float ramp(int k) { return (float)(k - 512) / 1024.0f; }
+
+static void test_tx(void) {
+  printf("transmit\n");
+  usleep(200000); // the earlier clients have gone
+  int a = quick_connect(), b = quick_connect();
+  if (a < 0 || b < 0) {
+    CHECK(0, "two clients");
+    return;
+  }
+  drain(a, 100);
+  drain(b, 100);
+
+  send_text(a, "tx_stream_audio_buffering:50;");
+  CHECK(expect(a, "tx_stream_audio_buffering:50;", 500), "buffering set");
+  send_text(a, "trx:0,true,tci;");
+  CHECK(expect(a, "trx:0,true;", 500) && expect(b, "trx:0,true;", 500),
+        "trx:0,true,tci echoed to every client");
+  CHECK(radio_now().tx && tx_own_audio && tci_holds_tx() && tci_tx_audio_owned(),
+        "keyed, with the client's own audio");
+
+  size_t len = 0;
+  uint8_t *f = next_stream(a, TCI_TX_CHRONO, 500, &len);
+  CHECK(f && get_u32(f + 4) == 48000 && get_u32(f + 20) == 2048 && get_u32(f + 28) == 2,
+        "TX_CHRONO asks for 1024 stereo frames at 48 kHz");
+  free(f);
+  uint8_t *none = next_stream(b, TCI_TX_CHRONO, 200, &len);
+  CHECK(!none, "only of the client that holds TX");
+  free(none);
+
+  double out[1024];
+  while (tci_pull_audio_tx(out, 1024) > 0)
+    ; // nothing queued yet
+  send_tx_audio(a, 1024, ramp);
+  int got = 0;
+  WAIT_FOR((got += tci_pull_audio_tx(out + got, 1024 - got)) >= 1024, 500);
+  int same = got == 1024;
+  for (int k = 0; same && k < 1024; k++)
+    same = out[k] == ramp(k);
+  CHECK(same, "its audio reaches the audio thread, left channel, in order (%d samples)", got);
+  send_tx_audio(b, 1024, ramp);
+  usleep(100000);
+  CHECK(tci_pull_audio_tx(out, 1024) == 0, "another client's audio is dropped");
+
+  int calls = tx_calls_now();
+  send_text(b, "trx:0,false;");
+  CHECK(expect(b, "trx:0,true;", 500) && radio_now().tx && tx_calls_now() == calls,
+        "another client can't unkey it");
+  send_text(b, "trx:0,true,tci;");
+  CHECK(expect(b, "trx:0,true;", 500) && tx_calls_now() == calls, "nor take it");
+  send_text(a, "trx:0,true,tci;");
+  CHECK(expect(a, "trx:0,true;", 500) && tx_calls_now() == calls, "a repeated trx changes nothing");
+
+  send_text(a, "trx:0,false;");
+  CHECK(expect(a, "trx:0,false;", 500) && expect(b, "trx:0,false;", 500), "trx:0,false echoed");
+  CHECK(!radio_now().tx && !tci_holds_tx() && !tci_tx_audio_owned(), "unkeyed and released");
+  send_tx_audio(a, 1024, ramp);
+  usleep(100000);
+  CHECK(tci_pull_audio_tx(out, 1024) == 0, "audio after release is dropped");
+
+  send_text(b, "trx:0,true;");
+  CHECK(expect(b, "trx:0,true;", 500) && radio_now().tx && !tx_own_audio && !tci_tx_audio_owned(),
+        "trx with no source: keyed with sbitx's audio");
+  send_text(b, "trx:0,false;");
+  CHECK(expect(b, "trx:0,false;", 500) && !tci_holds_tx(), "and released");
+
+  pthread_mutex_lock(&radio_lock);
+  radio.tx = 1; // the microphone's PTT, say
+  pthread_mutex_unlock(&radio_lock);
+  drain(a, 200);
+  calls = tx_calls_now();
+  send_text(a, "trx:0,true,tci;");
+  CHECK(expect(a, "trx:0,true;", 500) && tx_calls_now() == calls && !tci_holds_tx(),
+        "while sbitx transmits for something else, trx is ignored");
+  send_text(a, "trx:0,false;");
+  CHECK(expect(a, "trx:0,true;", 500) && radio_now().tx, "and can't unkey it");
+  pthread_mutex_lock(&radio_lock);
+  radio.tx = 0;
+  pthread_mutex_unlock(&radio_lock);
+  drain(a, 200);
+  drain(b, 200);
+
+  tx_refuse = 1; // sbitx's mode doesn't take it
+  send_text(b, "trx:0,true,tci;");
+  CHECK(expect(b, "trx:0,false;", 500) && !tci_holds_tx() && !tci_tx_audio_owned() &&
+            !radio_now().tx,
+        "a trx the radio refuses: answered false, nothing held");
+  tx_refuse = 0;
+  drain(a, 200);
+  drain(b, 200);
+
+  send_text(b, "trx:0,true,tci;");
+  expect(b, "trx:0,true;", 500);
+  pthread_mutex_lock(&radio_lock);
+  radio.tx = 0; // sbitx ended it: a timeout, the VSWR trip
+  pthread_mutex_unlock(&radio_lock);
+  CHECK(WAIT_FOR(!tci_holds_tx(), 500) && expect(a, "trx:0,false;", 500),
+        "TX ending in sbitx releases the client, and is reported");
+
+  send_text(a, "trx:0,true,tci;");
+  expect(a, "trx:0,true;", 500);
+  close(a);
+  CHECK(WAIT_FOR(!tci_holds_tx() && !radio_now().tx, 1500),
+        "a client that disconnects while holding TX unkeys it");
+
+  send_text(b, "trx:0,true,tci;");
+  expect(b, "trx:0,true;", 500);
+  tci_stop();
+  CHECK(!tci_holds_tx() && !radio_now().tx, "stopping the server unkeys it");
+  close(b);
+  tci_init("127.0.0.1", ws_test_port, TCI_DEFAULT_MAX_CLIENTS);
 }
 
 static void test_limit(void) {
@@ -492,6 +649,36 @@ static void test_decim48k(void) {
         -g30, -g40);
 }
 
+// The levels of the hz component and of its image at 48000 - hz in the
+// 96 kHz output, for a 48 kHz tone at hz.
+static void upsample_levels(double hz, double *wanted_db, double *image_db) {
+  struct upsample48k_state u = {0};
+  enum { N = 9600 };
+  static double y[2 * N];
+  for (int k = 0; k < N; k++)
+    upsample48k_apply(&u, sin(2 * M_PI * hz * k / 48000.0), y + 2 * k);
+  double fw[2] = {hz, 48000.0 - hz}, lvl[2];
+  for (int w = 0; w < 2; w++) {
+    double re = 0, im = 0;
+    for (int k = 400; k < 2 * N; k++) {
+      re += y[k] * cos(2 * M_PI * fw[w] * k / 96000.0);
+      im += y[k] * sin(2 * M_PI * fw[w] * k / 96000.0);
+    }
+    lvl[w] = 20 * log10(2 * sqrt(re * re + im * im) / (2 * N - 400) + 1e-12);
+  }
+  *wanted_db = lvl[0];
+  *image_db = lvl[1];
+}
+
+static void test_upsample48k(void) {
+  printf("upsample48k\n");
+  double w1, i1, w3, i3;
+  upsample_levels(1000, &w1, &i1);
+  upsample_levels(3000, &w3, &i3);
+  CHECK(fabs(w1) < 0.3 && fabs(w3) < 0.3, "unity gain (%.2f dB at 1 kHz, %.2f dB at 3 kHz)", w1, w3);
+  CHECK(i1 < -50 && i3 < -50, "the images at 47 and 45 kHz down %.0f and %.0f dB", -i1, -i3);
+}
+
 int main(void) {
   for (ws_test_port = 45951; ws_test_port < 46000; ws_test_port++)
     if (tci_init("127.0.0.1", ws_test_port, TCI_DEFAULT_MAX_CLIENTS) == 0)
@@ -501,10 +688,12 @@ int main(void) {
   test_burst();
   test_sets_and_echoes();
   test_changes_elsewhere();
+  test_tx();
   test_limit();
   test_streams();
   test_restart(ws_test_port);
   test_decim48k();
+  test_upsample48k();
 
   tci_stop();
   printf(failures ? "\n%d check(s) FAILED\n" : "\nall checks passed\n", failures);
