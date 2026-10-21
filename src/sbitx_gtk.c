@@ -11111,6 +11111,37 @@ int get_tx_data_length()
 		return 0;
 }
 
+// Appends CW text to the TEXT field, the keyer's queue, as much as it has
+// room for, and marks it ready to send, as a macro does in CW. Returns how
+// many characters went in.
+int cw_text_append(const char *text)
+{
+	struct field *f = get_field("#text_in");
+	int len = strlen(f->value);
+	int room = f->max - 1 - len;
+	int n = strlen(text);
+	if (n > room)
+		n = room < 0 ? 0 : room;
+	if (n > 0)
+	{
+		memcpy(f->value + len, text, n);
+		f->value[len + n] = 0;
+		text_ready = 1;
+		update_field(f);
+	}
+	return n;
+}
+
+// Empties the keyer's queue and stops the character being sent.
+void cw_text_clear(void)
+{
+	struct field *f = get_field("#text_in");
+	f->value[0] = 0;
+	text_ready = 0;
+	update_field(f);
+	cw_stop_text();
+}
+
 int is_in_tx()
 {
 	return in_tx;
