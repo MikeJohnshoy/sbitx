@@ -30,6 +30,9 @@ int tci_running(void);
 // Nonzero while a client holds TX (any thread).
 int tci_holds_tx(void);
 
+// How many clients are connected (any thread).
+int tci_client_count(void);
+
 // ---- Audio thread ---------------------------------------------------------
 //
 // Neither blocks, locks or allocates; each returns at once when no client
