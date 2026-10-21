@@ -166,6 +166,51 @@ and is to be confirmed on the air with sdrOxide (§11).
 While transmitting, the tap sends silence, so a client's stream keeps
 its timing.
 
+**dds and if: a panadapter tuning inside its panorama.** In TCI, `dds`
+is the I/Q's centre and `if` the VFO's offset from it, `vfo = dds + if`.
+sdrOxide treats a TCI radio as a wideband SDR whose I/Q centre is
+separate from its dial (its `center_is_dial()` is false for TCI): a
+click or drag inside its panorama keeps `dds` and sends
+`if:0,0,<offset>` (`Ctrl::SetIf`), and it moves `dds` only when the VFO
+leaves about 45% of the span (`keep_vfo_in_span()`). sbitx answered every
+`if` with 0 at first, so a click moved sbitx only on a big jump, and then
+to the new centre rather than where it was clicked. Now `tci.c` keeps
+`dds` and `if` (`center`, `if_off`):
+
+- `if:0,0,<offset>` (within `if_limits`, +-48 kHz) tunes sbitx's dial to
+  `dds + offset`, the centre kept;
+- `dds:0,<Hz>` moves the centre and the dial with it, the offset kept;
+- `vfo:0,0,<Hz>` (JTDX, Hamlib) tunes the dial there and re-centres,
+  `dds` = the dial, `if` 0;
+- the dial moving anywhere else in sbitx (the knob, a band change, the web
+  UI, rigctld) re-centres too, within 50 ms, which matches what sdrOxide
+  does with a VFO report it didn't ask for (it adopts it as the new
+  centre, IF 0);
+- every change is sent as `dds`, `if` and `vfo` (both channels).
+
+sbitx has one oscillator, so its I/Q is always centred on its own receive
+frequency (`freq_hdr`, the dial plus RIT). TCI's copy is shifted, in
+`tci_sbitx_rx_block()`, by `freq_hdr - dds`, so it stays centred where the
+client put `dds` and signals stay where they are in its panorama while
+sbitx retunes. The live part is sbitx's own width, about +-24 kHz around
+its dial (`fir_lpf_iq()`), so with the VFO away from the centre the far
+side of the panorama is empty until the client re-centres. At an I/Q rate
+of 96 kHz an offset past about 24 kHz also folds the top of sbitx's band
+round to the other edge of the panorama; at 48 kHz, where sdrOxide
+re-centres at about 21.6 kHz, neither happens, so 48 kHz is the rate to
+set in sdrOxide. A shift beyond +-48 kHz (the moment a big retune is
+catching up) sends silence.
+
+**CW's pitch.** In CW, sbitx moves both its oscillator and its digital
+mixer by PITCH (`radio_tune_to()`, `rx_osc_freq_for_mode()`), so a
+zero-beat signal sits PITCH above the I/Q's centre (below in CWR); sbitx's
+own spectrum allows for it, with its pitch marker at dial + PITCH and a
+click there subtracting PITCH. TCI's copy takes it back out (the shift
+gets -PITCH in CW, +PITCH in CWR), so a client's frequency scale is the
+true one and a CW signal clicked in sdrOxide puts sbitx's dial, which in
+CW is where it transmits, on that signal. This too is reasoning from the
+code, and with the orientation above is to be confirmed (§11).
+
 ### 3.4 Receive audio
 
 The demodulated audio leaves `rx_linear()` in `output_speaker`, int32 at
@@ -398,10 +443,13 @@ WSJT-X on the loopback and JTDX on TCI can both receive at once.
 needs and runs it; nothing in the radio program's own build changes.
 
 - `/tmp/sbitx-test_tci_ws`: 31 checks of the WebSocket server alone.
-- `/tmp/sbitx-test_tci`: 99 checks of the server with a stub radio: the
+- `/tmp/sbitx-test_tci`: 109 checks of the server with a stub radio: the
   burst's order and form; the client count; every set echoed to every client, with the value
   in force when it was out of range or not offered; reads answered to the
   asker alone; frequency, mode (uppercase accepted), drive (0 held at 1),
+  `dds` and `if` (a `vfo` set re-centring, `if` tuning to `dds + if` with
+  the centre kept, `dds` moving both with the offset kept, reads, an
+  offset beyond `if_limits`, the dial moving elsewhere re-centring),
   volume in dB, mute and rx_mute, CW speed and speed-up; RIT, split and
   XIT answered without setting anything; several commands to a
   message; a change elsewhere reaching both clients within about 50 ms,
@@ -420,7 +468,7 @@ needs and runs it; nothing in the radio program's own build changes.
   and none of them answered; stopping
   and starting again on the same port; `decim48k`'s passband and
   stopband, and `upsample48k`'s gain and images.
-- `/tmp/sbitx-test_tci_sbitx`: 83 checks of `tci_sbitx.c` with sbitx's
+- `/tmp/sbitx-test_tci_sbitx`: 87 checks of `tci_sbitx.c` with sbitx's
   fields and command queue stubbed: the TCI setting starting the server;
   the state published from the fields; the command each `trx` becomes in
   each mode (`t`, `rtx`, `r`), or its refusal (own audio in AM, FM, CW,
@@ -436,7 +484,8 @@ needs and runs it; nothing in the radio program's own build changes.
   reported), refusal outside CW, the TEXT field filled, the next macro
   after a word space, a long text following in order as the keyer sends
   it, `cw_macros_stop`, the key stopping TCI text but not when there is
-  none, and leaving CW dropping what waits.
+  none, and leaving CW dropping what waits; the I/Q's shift, read by a
+  client - none, -700 Hz, +20 kHz, and silence beyond the I/Q's width.
 - `/tmp/sbitx-test_modem_cw`: 10 checks of the keyboard keyer in
   `modem_cw.c`, with sbitx around it stubbed, measuring the transmitted
   envelope: a dot at WPM, the speed codes changing it for what follows
@@ -501,11 +550,18 @@ styles, whose numbering style files and the web UI rely on.
    TEXT field). `cw_msg`, `cw_terminal` and `cw_macros_empty` are left out.
 10. **The key or paddle stops TCI text**, as the operator taking over; sbitx's
     own macros keep today's behaviour.
+11. **dds and if are honoured**, sbitx's dial going to `dds + if`, and TCI's
+    I/Q shifted to stay centred on `dds`, and in CW and CWR by the pitch,
+    so a click in sdrOxide's panorama, in any mode, tunes sbitx there
+    (§3.3).
 
 ## 11. Open
 
-- **The I/Q's orientation** (§3.3): as reasoned from the code; to confirm
-  with sdrOxide.
+- **The I/Q's orientation and CW's pitch** (§3.3): as reasoned from the
+  code; to confirm with sdrOxide. In CW, a carrier with sbitx's dial on it
+  (zero beat in sbitx's speaker) should show in sdrOxide on the dial's
+  frequency; before the pitch correction it would have shown PITCH above
+  it. In USB, a station above the dial should show above it.
 - **Audio levels** into WSJT-X and JTDX over TCI, compared with the
   loopback's; and the power a program's FT8 over TCI gives against
   sbitx's own FT8 at the same DRIVE, which should be the same (§3.5); to
