@@ -1,11 +1,13 @@
 # TCI for sbitx
 
-Status: **steps 0-4 built** (groundwork, transport, control, receive
-streams, transmit), on branch `tci_for_sbitx` from `dbeb281`. Steps 0-3
-are in use on the radio with sdrOxide; transmit (step 4) passes its bench tests
-(§8) and compiles into sbitx, and is next to try into a dummy load with
-JTDX. CW over TCI (step 5) and the settings screen (step 6) come next.
-The decisions are in §10; §11 lists what is still open.
+Status: **steps 0-5 built** (groundwork, transport, control, receive
+streams, transmit, CW text), on branch `tci_for_sbitx` from `dbeb281`.
+Steps 0-3 are in use on the radio with sdrOxide, and transmit (step 4)
+has been tried with JTDX, which found its audio level 26 dB too hot
+(§3.5, now fixed). CW over TCI (step 5, §3.7) passes its bench tests (§8)
+and compiles into sbitx, and is next to try on the radio. The settings
+screen (step 6) comes next. The decisions are in §10; §11 lists what is
+still open.
 
 TCI (Expert Electronics' Transceiver Control Interface, v2.0) is one
 WebSocket connection that carries text commands for control and binary
@@ -56,7 +58,7 @@ fldigi, PSK31 and RTTY, and 960 lines of tests.
 | `tci.c` | Command parsing, the start-up burst and the echo rules; every call into the radio goes through `tci_radio.h` (§5), so `tci.c` holds only the protocol. |
 | `tci_test.c` | `tests/test_tci.c`, rewritten for what sbitx's TCI does now, with a stub radio behind `tci_radio.h`. |
 | `upsample48k.c` | As is: 48 to 96 kHz for transmit audio (§3.5). |
-| `tci_cw.c` | Not yet: CW text (step 5). |
+| `tci_cw.c` | Rewritten: maxibitx's queues text for its own keyer; sbitx's translates TCI's markup for sbitx's keyer (§3.7), and `cw_msg` and terminal mode aren't carried. |
 
 **What the clients taught maxibitx**, which sbitx gets:
 
@@ -226,6 +228,55 @@ isn't lost while keying catches up. TX_CHRONO pacing keeps what is queued
 to the client's `tx_stream_audio_buffering` (50 ms by default) plus one
 request.
 
+### 3.7 CW text
+
+sbitx sends CW text from the TEXT field (`#text_in`, 128 characters): a
+macro or Enter appends to it and sets `text_ready`, the audio thread takes
+a character at a time (`get_tx_data_byte()`) for the keyboard keyer, and
+`cw_poll()` keys the transmitter while text remains and releases it
+after CW_DELAY. TCI's CW text goes the same way, as sbitx's own macros
+do, so it shows in the TEXT field, the TX decoder echoes it on the
+console, and break-in, WPM, the envelope and the sidetone are as they
+are for any CW text. In CW and CWR only.
+
+- **`cw_macros:0,<text>;`** `tci.c` takes the text after the transceiver
+  number, keeping any commas the protocol reserves but a client sent
+  anyway; `tci_sbitx.c` refuses it outside CW and CWR, translates it
+  (`tci_cw.c`) and queues it. The GTK thread moves the queue into the
+  TEXT field as it has room, so text of any length goes in order. A
+  macro that follows one still in the field gets a word space before it,
+  so the two don't run together (`CQ TEST` then `DE KB2ML`).
+- **The markup.** Prosigns between bars become the characters sbitx's
+  Morse table has for them: `|AR|` +, `|SK|` >, `|BT|` =, `|KN|` (,
+  `|AS|` &, `|BK|` <. Others between bars (`|HH|`, `|SN|`) go as their
+  letters. `^ ~ *` stand for the reserved `: , ;`. A character the table
+  lacks is left out and reported on the console.
+- **Speed changes.** TCI's `<` and `>` send what follows 5 WPM slower or
+  faster, and the next macro starts at WPM again. sbitx's keyer had no
+  speed change inside its text, so `modem_cw.c` now has two speed codes
+  in the text, `[` (CW_SPEED_DOWN) and `]` (CW_SPEED_UP), that take no
+  time: the keyer reads past them, changing its offset from WPM, within 1
+  to 60 WPM. A translated macro ends with as many codes as undo its own,
+  so it always leaves the speed at WPM. They work from the TEXT field
+  too (`TU [5NN] TU`). The receive decoder still starts from WPM; the
+  decoder of what is sent follows the codes.
+- **`cw_macros_stop;`** empties the TEXT field and stops the character
+  being sent, the element in progress completing (`cw_text_clear()`,
+  `cw_stop_text()`), and the speed goes back to WPM; TX ends after
+  CW_DELAY as at the end of any text.
+- **The key or paddle** closing while TCI text is being sent (waiting, or
+  in the TEXT field) stops it the same way: the operator has taken over.
+  `cw_poll()` counts the closures (`cw_key_press_count()`). sbitx's own
+  macros keep their behaviour, the key's elements going in between their
+  characters.
+- **Leaving CW** drops what is waiting; sbitx's own mode change clears
+  the field.
+- **`cw_macros_speed`**, `cw_keyer_speed` and speed up and down set WPM, as
+  before (§3.1).
+
+`cw_msg` (a message whose callsign can be corrected until it is sent),
+`cw_terminal` and `cw_macros_empty` are not built (§10, §11).
+
 ## 4. Modes over TCI
 
 TCI offers USB, LSB, CW, CWR and DIGI:
@@ -332,15 +383,22 @@ WSJT-X on the loopback and JTDX on TCI can both receive at once.
    watching the power and the transmitted spectrum on a second receiver,
    then on the air; and the loopback with JTDX's audio set to the sound
    card, which keys with `rtx`.
-5. **CW over TCI.** `cw_msg`, `cw_macros` and the rest, through sbitx's
-   CW text path, read back from what is keyed.
+5. **CW over TCI - built.** `cw_macros` and `cw_macros_stop` (`tci.c`),
+   the queue into the TEXT field (`tci_sbitx.c`), the markup
+   (`tci_cw.c`), the speed codes and the key's closures (`modem_cw.c`).
+   Bench: `tests/test_tci.c`, `tests/test_tci_sbitx.c`,
+   `tests/test_modem_cw.c`. To test on the radio: Hamlib's
+   `rigctl -m 43001` (`b CQ TEST`, `\stop_morse`) and a logger's CW
+   macros (Log4OM), into a dummy load, listening to the sidetone and
+   watching the TEXT field and the console's TX decode; a long macro, a
+   macro with `<` and `>`, and the paddle during a macro.
 6. **Settings screen and README.**
 
 **Tests.** `make test` builds each `tests/test_*.c` with the sources it
 needs and runs it; nothing in the radio program's own build changes.
 
 - `/tmp/sbitx-test_tci_ws`: 31 checks of the WebSocket server alone.
-- `/tmp/sbitx-test_tci`: 91 checks of the server with a stub radio: the
+- `/tmp/sbitx-test_tci`: 99 checks of the server with a stub radio: the
   burst's order and form; the client count; every set echoed to every client, with the value
   in force when it was out of range or not offered; reads answered to the
   asker alone; frequency, mode (uppercase accepted), drive (0 held at 1),
@@ -356,10 +414,13 @@ needs and runs it; nothing in the radio program's own build changes.
   the radio refuses answered false with nothing held, release on
   `trx:0,false` with later audio dropped, `trx` with no source keying with
   sbitx's audio, `trx` ignored while sbitx transmits for something else,
-  release when TX ends in sbitx, on disconnect and on stopping; stopping
+  release when TX ends in sbitx, on disconnect and on stopping; CW text -
+  `cw_macros` reaching the radio as sent (uppercase, spaces, commas, the
+  reserved characters), another transceiver's ignored, `cw_macros_stop`,
+  and none of them answered; stopping
   and starting again on the same port; `decim48k`'s passband and
   stopband, and `upsample48k`'s gain and images.
-- `/tmp/sbitx-test_tci_sbitx`: 61 checks of `tci_sbitx.c` with sbitx's
+- `/tmp/sbitx-test_tci_sbitx`: 83 checks of `tci_sbitx.c` with sbitx's
   fields and command queue stubbed: the TCI setting starting the server;
   the state published from the fields; the command each `trx` becomes in
   each mode (`t`, `rtx`, `r`), or its refusal (own audio in AM, FM, CW,
@@ -369,9 +430,21 @@ needs and runs it; nothing in the radio program's own build changes.
   of sbitx's own FT8 tones), its frequency through the upsampler,
   clipping at that level, silence when the client is late, late audio discarded while
   receiving, and, between unkeying and sbitx receiving, silence rather
-  than the microphone and FT8 still standing aside.
+  than the microphone and FT8 still standing aside; CW text - the
+  markup's translation (prosigns, speed codes and their undoing, even when
+  cut short, the reserved characters, what sbitx can't send left out and
+  reported), refusal outside CW, the TEXT field filled, the next macro
+  after a word space, a long text following in order as the keyer sends
+  it, `cw_macros_stop`, the key stopping TCI text but not when there is
+  none, and leaving CW dropping what waits.
+- `/tmp/sbitx-test_modem_cw`: 10 checks of the keyboard keyer in
+  `modem_cw.c`, with sbitx around it stubbed, measuring the transmitted
+  envelope: a dot at WPM, the speed codes changing it for what follows
+  and back (20, 25, 10 WPM), never below 1 WPM, `cw_stop_text()` letting
+  the element in progress complete and nothing after, even inside a
+  letter, and going back to WPM, and the key's closures counted.
 
-All three pass on a PC, repeatedly. sbitx's changed files compile with no new
+All four pass on a PC, repeatedly. sbitx's changed files compile with no new
 warnings; the whole program links against stubs for everything but
 wiringPi and the FT8 library.
 
@@ -423,6 +496,11 @@ styles, whose numbering style files and the web UI rely on.
    (built as step 4, for FT8 first).
 7. **At most 4 clients**, a constant, not a setting.
 8. **RIT is reported but not set over TCI**; XIT and split report off.
+9. **CW over TCI, the core:** `cw_macros` (prosigns, `<` `>` speed
+   changes) and `cw_macros_stop`, through sbitx's own CW text path (the
+   TEXT field). `cw_msg`, `cw_terminal` and `cw_macros_empty` are left out.
+10. **The key or paddle stops TCI text**, as the operator taking over; sbitx's
+    own macros keep today's behaviour.
 
 ## 11. Open
 
@@ -439,6 +517,11 @@ styles, whose numbering style files and the web UI rely on.
   early when the mode `== "CWR"` rather than `!= "CWR"`, so typing in the
   web UI's CW window is ignored in CWR. It was so before; removing the
   PSK31 and RTTY terms kept its behaviour.
+- **CW over TCI** (§3.7): `cw_msg` with callsign correction (DXLog-style
+  contest loggers), `cw_terminal` and `cw_macros_empty` are for a later
+  step. TCI text joins whatever is in the TEXT field, so text typed there
+  but not yet sent with Enter goes out ahead of it, as with sbitx's own
+  macros.
 - **A program's own audio in AM and FM** (§3.5): refused for now. Sending
   it needs a level for each, matched to how JTDX or sdrOxide set their
   output, and a limit in place of the voice clip.
