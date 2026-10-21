@@ -20,7 +20,9 @@
 #include "tci_sbitx.h"
 #include "tci_cw.h"
 #include "tci_stream.h"
+#include "ws_test_client.h"
 #include <math.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -119,6 +121,112 @@ static struct tci_radio_state state(void) {
 }
 
 /* ---- Tests ---------------------------------------------------------------- */
+
+// The frequency of the I/Q frames a client gets, from their phase steps.
+static double iq_frequency(int fd, int frames) {
+  double re = 0, im = 0, pi_ = 0, pq_ = 0;
+  int have_prev = 0;
+  for (int f = 0; f < frames; f++) {
+    uint8_t *d = NULL;
+    size_t len;
+    int op;
+    do {
+      free(d);
+      d = NULL;
+      struct pollfd p = {fd, POLLIN, 0};
+      if (poll(&p, 1, 1000) <= 0)
+        return NAN;
+      op = recv_frame(fd, &d, &len, NULL);
+    } while (op == 1 || (op == 2 && (len < TCI_HEADER_BYTES || d[24] != TCI_IQ_STREAM)));
+    if (op != 2) {
+      free(d);
+      return NAN;
+    }
+    for (size_t k = TCI_HEADER_BYTES; k + 8 <= len; k += 8) {
+      float i, q;
+      memcpy(&i, d + k, 4);
+      memcpy(&q, d + k + 4, 4);
+      if (have_prev) { // z[k] * conj(z[k-1])
+        re += i * pi_ + q * pq_;
+        im += q * pi_ - i * pq_;
+      }
+      pi_ = i;
+      pq_ = q;
+      have_prev = 1;
+    }
+    free(d);
+  }
+  return atan2(im, re) * 96000.0 / (2 * M_PI);
+}
+
+// The audio thread: blocks of a tone at hz in the I/Q, shifted by shift.
+static void iq_tone_blocks(double hz, int shift, int blocks) {
+  static double i[1024], q[1024];
+  static long t;
+  for (int b = 0; b < blocks; b++) {
+    for (int k = 0; k < 1024; k++, t++) {
+      i[k] = 0.5 * cos(2 * M_PI * hz * t / 96000.0);
+      q[k] = 0.5 * sin(2 * M_PI * hz * t / 96000.0);
+    }
+    tci_sbitx_rx_block(NULL, i, q, 1024, shift);
+    usleep(2000);
+  }
+}
+
+// Discards what the client has been sent, then the I/Q's frequency for a
+// 1000 Hz tone shifted by shift.
+static double shifted(int fd, int shift) {
+  usleep(100000);
+  uint8_t *d = NULL;
+  size_t len;
+  struct pollfd p = {fd, POLLIN, 0};
+  while (poll(&p, 1, 50) > 0 && recv_frame(fd, &d, &len, NULL) >= 0) {
+    free(d);
+    d = NULL;
+  }
+  iq_tone_blocks(1000, shift, 10);
+  return iq_frequency(fd, 3);
+}
+
+static void test_iq_shift(void) {
+  printf("the I/Q's shift\n");
+  ws_test_port = 46071;
+  int fd = ws_connect();
+  if (fd < 0) {
+    CHECK(0, "a client");
+    return;
+  }
+  const char *start = "iq_samplerate:96000;iq_start:0;";
+  send_frame(fd, 1, 1, start, strlen(start), 1);
+  double f0 = shifted(fd, 0), f1 = shifted(fd, -700), f2 = shifted(fd, 20000);
+  CHECK(fabs(f0 - 1000) < 1, "no shift: a 1000 Hz tone stays at %.1f Hz", f0);
+  CHECK(fabs(f1 - 300) < 1, "shifted -700 Hz (CW's pitch): %.1f Hz", f1);
+  CHECK(fabs(f2 - 21000) < 1, "shifted +20 kHz (an if offset): %.1f Hz", f2);
+  usleep(100000);
+  { // beyond the I/Q's width: silence
+    uint8_t *d = NULL;
+    size_t len;
+    struct pollfd p = {fd, POLLIN, 0};
+    while (poll(&p, 1, 50) > 0 && recv_frame(fd, &d, &len, NULL) >= 0) {
+      free(d);
+      d = NULL;
+    }
+    iq_tone_blocks(1000, 60000, 10);
+    double peak = 0;
+    for (int f = 0; f < 3 && poll(&p, 1, 1000) > 0; f++) {
+      if (recv_frame(fd, &d, &len, NULL) == 2 && len > TCI_HEADER_BYTES && d[24] == TCI_IQ_STREAM)
+        for (size_t k = TCI_HEADER_BYTES; k + 4 <= len; k += 4) {
+          float x;
+          memcpy(&x, d + k, 4);
+          peak = fabs(x) > peak ? fabs(x) : peak;
+        }
+      free(d);
+      d = NULL;
+    }
+    CHECK(peak == 0, "a shift beyond the I/Q's width sends silence");
+  }
+  close(fd);
+}
 
 static void test_setting_and_state(void) {
   printf("the TCI setting and the published state\n");
@@ -418,6 +526,7 @@ int main(void) {
   test_tx_audio();
   test_translate();
   test_cw_queue();
+  test_iq_shift();
   tci_stop();
   printf(failures ? "\n%d check(s) FAILED\n" : "\nall checks passed\n", failures);
   return failures ? 1 : 0;
