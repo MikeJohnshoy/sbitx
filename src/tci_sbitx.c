@@ -47,10 +47,13 @@
 // own audio, which takes the audio from the loopback as rigctld's PTT does
 // for WSJT-X. With its own audio (trx:0,true,tci), that audio replaces
 // whatever sbitx would send in USB, LSB, DIGI, FT8 and FT4: it is pulled
-// at 48 kHz, upsampled to 96 kHz and scaled so 1 is int32 full scale, the
-// loopback's level, and goes into tx_process() as the microphone would,
+// at 48 kHz, upsampled to 96 kHz and scaled so its full scale is the level
+// of sbitx's own FT8 tones (TX_AUDIO_SCALE), and goes into tx_process() as
+// the microphone would,
 // without the voice processing (compression, EQ, CESSB, the voice clip),
-// since it is a program's line audio. In AM, FM, CW and CWR, which take
+// since it is a program's line audio. The level matters because JTDX in
+// TCI mode sends its audio at full scale and turns its power slider into
+// drive: commands, which set DRIVE, so power is set as for sbitx's own FT8. In AM, FM, CW and CWR, which take
 // their audio at other levels or none, a trx with its own audio is
 // refused; in 2TONE, any trx. While a client holds TX, and until sbitx has
 // run the r that ends it, sbitx's own FT8/FT4 modem steps aside (modems.c):
@@ -79,6 +82,11 @@
 #define RETRY_MS 10000     // after a failed start, wait this long to try again
 #define PENDING_MS 1000
 #define BLOCK_MAX 2048
+// sbitx's own FT8 sends its tones into tx_process() at 1/21 of full scale
+// (ft8_next_sample()'s /7, tx_process()'s /3), and DRIVE is calibrated for
+// that level. A program's full scale is made the same; tx_process() divides
+// input_mic by 2e9 in the modes that take it.
+#define TX_AUDIO_SCALE (2.0e9 / 21.0)
 // A transmission's first and last blocks go without the client's audio
 // while keying catches up; report a shortfall only beyond that.
 #define TX_SHORT_REPORT_MS 100
@@ -376,7 +384,7 @@ int tci_sbitx_tx_block(int32_t *mic, int n, int mode) {
     upsample48k_apply(&up, k < got ? in48[k] : 0.0, out2);
     for (int j = 0; j < 2 && o < n; j++) {
       double x = out2[j] > 1.0 ? 1.0 : out2[j] < -1.0 ? -1.0 : out2[j];
-      mic[o++] = (int32_t)lrint(x * 2147483647.0);
+      mic[o++] = (int32_t)lrint(x * TX_AUDIO_SCALE);
     }
   }
   return 1;
