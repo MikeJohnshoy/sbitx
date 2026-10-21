@@ -1,11 +1,11 @@
 # TCI for sbitx
 
-Status: **steps 0-3 built** (groundwork, transport, control, receive
-streams), on branch `tci_for_sbitx` from `dbeb281`. They pass their bench
-tests (§8) and compile into sbitx; they have not yet been tried on the
-radio or on the air. Transmit (step 4), CW over TCI (step 5) and the
-settings screen (step 6) come next. The decisions are in §10; §11 lists
-what is still open.
+Status: **steps 0-4 built** (groundwork, transport, control, receive
+streams, transmit), on branch `tci_for_sbitx` from `dbeb281`. Steps 0-3
+are in use on the radio with sdrOxide; transmit (step 4) passes its bench tests
+(§8) and compiles into sbitx, and is next to try into a dummy load with
+JTDX. CW over TCI (step 5) and the settings screen (step 6) come next.
+The decisions are in §10; §11 lists what is still open.
 
 TCI (Expert Electronics' Transceiver Control Interface, v2.0) is one
 WebSocket connection that carries text commands for control and binary
@@ -36,6 +36,10 @@ threads already wrote to it; TCI is a fourth (§3.1).
 
 **PSK31, RTTY and the fldigi link are gone** (§9).
 
+**Transmit** keys with sbitx's own commands through the same queue, and a
+client's own audio replaces sbitx's in USB, LSB, DIGI, FT8 and FT4, even
+with sbitx left in its own FT8, whose modem steps aside (§3.2, §3.5).
+
 **Size:** about 2000 lines carried over (`tci_ws.c`, `tci_stream.c`,
 `tci.c`'s protocol, `decim48k.c`), about 300 new (`tci_sbitx.c`, the
 radio adapter), about 80 changed in sbitx, about 470 removed with
@@ -51,7 +55,8 @@ fldigi, PSK31 and RTTY, and 960 lines of tests.
 | `decim48k.c` | As is: 96 to 48 kHz for receive audio. |
 | `tci.c` | Command parsing, the start-up burst and the echo rules; every call into the radio goes through `tci_radio.h` (§5), so `tci.c` holds only the protocol. |
 | `tci_test.c` | `tests/test_tci.c`, rewritten for what sbitx's TCI does now, with a stub radio behind `tci_radio.h`. |
-| `upsample48k.c`, `tci_cw.c` | Not yet: transmit audio (step 4) and CW text (step 5). |
+| `upsample48k.c` | As is: 48 to 96 kHz for transmit audio (§3.5). |
+| `tci_cw.c` | Not yet: CW text (step 5). |
 
 **What the clients taught maxibitx**, which sbitx gets:
 
@@ -62,10 +67,10 @@ fldigi, PSK31 and RTTY, and 960 lines of tests.
   `ready;`, the whole burst in a few ms and well under Hamlib's 256
   messages;
 - a sensor value must contain a decimal point, or a client crashes;
-- for transmit (step 4): audio taken only from the client that holds TX
-  with source `tci`, and the ring discarded on every block that isn't
-  reading it; while one client holds TX the others' `trx` is ignored, and
-  a client that disconnects while transmitting releases TX.
+- for transmit: audio taken only from the client that holds TX with
+  source `tci`, and the ring discarded on every block that isn't reading
+  it; while one client holds TX the others' `trx` is ignored, and a
+  client that disconnects while transmitting releases TX.
 
 ## 3. Where TCI meets sbitx
 
@@ -107,13 +112,38 @@ any other change once the second is up.
 fields off the GTK thread. TCI doesn't copy that; `hamlib.c` could
 follow the same way later.
 
-### 3.2 Transmit and receive switching (step 4)
+### 3.2 Transmit and receive switching
 
-`hpsdr_p1.c` already keys sbitx from a network thread: it sets a pending
-action and asks the GTK thread to run it with `g_idle_add()`, which calls
-`tx_on(TX_SOFT)` or `tx_off()`. TCI's `trx` will do the same. For now
-`trx:0,true;` is answered with the state in force, and sbitx prints
-`tci: client N asked to transmit - TCI doesn't transmit yet`.
+**Who holds TX** is `tci.c`'s: one client at a time, from its
+`trx:0,true` until its `trx:0,false`, its disconnecting, the server
+stopping, or TX ending some other way in sbitx (the 50 ms comparison sees
+TX off while a client holds it, and releases it). While one client holds
+TX, another's `trx` is answered with the state in force and does
+nothing, and so is any `trx:0,true` while sbitx is already transmitting
+for something else (the microphone's PTT, rigctld, sbitx's own FT8): a
+TCI client can't unkey a transmission it didn't start. A repeated
+`trx:0,true` from the holder changes nothing. sbitx refuses a `trx:0,true`
+in 2TONE (it would send the test tones), and one with the client's own
+audio in AM, FM, CW and CWR (§3.5); it is answered `trx:0,false` and
+nothing is held.
+
+**Keying** goes through `remote_execute()` like every other set, with
+sbitx's own commands: `t` (`tx_on(TX_SOFT)`), `r` (`tx_off()`), and
+`rtx` (`tx_on()` with the loopback's audio, as rigctld's PTT gives
+WSJT-X) in DIGI, FT8 and FT4 when the client doesn't send its own audio.
+`hpsdr_p1.c` uses `g_idle_add()` instead; the queue is better here because
+it keeps a client's commands in order, so a frequency or mode set just
+before `trx` is applied before sbitx keys. Keying takes effect on the GTK
+thread's next tick; the TX state is reported at once and held, as other
+sets are (§3.1), until sbitx shows it or for 1 s.
+
+**sbitx's own FT8 and FT4** step aside while a client holds TX, and on
+until sbitx has run the `r` that ends it (`tci_sbitx_tx_engaged()`):
+`modem_poll()` doesn't run `ft8_poll()`, which would otherwise end the
+transmission at once (it unkeys whenever it has no samples of its own,
+and wipes the QSO fields as it does) or start one of its own, and
+`tx_process()` doesn't take the modem's samples. So JTDX can transmit
+with sbitx left in FT8, decoding in parallel.
 
 ### 3.3 I/Q
 
@@ -144,16 +174,43 @@ loopback gives WSJT-X, decimates it to 48 kHz with `decim48k.c` (flat to
 the lower rates from that in the service thread. So TCI's audio doesn't
 follow AUDIO or MUTE, as the loopback's doesn't.
 
-### 3.5 Transmit audio (step 4)
+### 3.5 Transmit audio
 
 In DIGI, sbitx takes its transmit audio from the ALSA loopback: with
 `use_virtual_cable` set, `input_q` comes from the loopback queue
-(`sbitx_sound.c`). TCI's transmit audio will go in at the same point,
-upsampled 48 to 96 kHz, following the precedence in §6. The web UI's
-microphone already feeds `tx_process()` from a queue the same way
-(`browser_mic_input()`, `sbitx.c`). The functions it will use are in
-`tci_stream.h` (`tci_tx_audio_owned()`, `tci_pull_audio_tx()`,
-`tci_tx_audio_idle()`); sbitx doesn't call them yet.
+(`sbitx_sound.c`), and `tx_process()` modulates it as it would the
+microphone. A client's own audio goes in at the same point: each block,
+before `tx_process()`, `sound_process()` calls `tci_sbitx_tx_block()`,
+which, while a client holds TX with source `tci`, pulls the client's 48 kHz
+audio from `tci_stream.c`'s ring, upsamples it to 96 kHz
+(`upsample48k.c`, unity gain, images 56 dB down), scales it so 1 is int32
+full scale - the loopback's level, so a program's power setting behaves
+as it does with WSJT-X on the loopback - clips anything beyond, and writes
+it over `input_mic`. If the client is late, the rest of the block is
+silence, and once the transmission is over sbitx prints how much was
+missing if it was more than 100 ms (the first and last blocks always miss
+a little while keying catches up).
+
+It takes precedence (§6, §10) in USB, LSB, DIGI, FT8 and FT4: over the
+microphone, the browser's microphone, the loopback and sbitx's own FT8/FT4
+modem. Being a program's line audio, it skips the voice processing
+(compression, the TX EQ, CESSB, the voice clip). AM and FM take their
+audio at other levels (`input_mic` / 2e8 and / 9.2e7, against / 2e9 in
+the other modes), so at the loopback's level a program would overmodulate
+them tenfold and more, and without the voice clip nothing would limit it;
+CW and CWR are keyed, not played. A `trx` with the client's own audio is
+refused in those four (§3.2) rather than sent wrongly; §11.
+
+Between a client's `trx:0,false` and sbitx running the `r` that ends the
+transmission (the GTK thread's next tick), an own-audio TX sends silence,
+not whatever the microphone picks up.
+
+While receiving, `tci_sbitx_tx_idle()` discards any audio a client sent
+late, so it can't reach the next transmission, except between a client's
+`trx` and sbitx actually transmitting, so the start of the client's audio
+isn't lost while keying catches up. TX_CHRONO pacing keeps what is queued
+to the client's `tx_stream_audio_buffering` (50 ms by default) plus one
+request.
 
 ## 4. Modes over TCI
 
@@ -176,7 +233,7 @@ say) is answered with the mode in force.
 
 **`tci_radio.h`** is everything `tci.c` needs from the radio: a state
 struct (frequency, mode, TX, drive, volume, mute, RIT on and offset, CW
-speed, signal strength in dBm) and six sets. sbitx's side is
+speed, signal strength in dBm), six sets, and keying. sbitx's side is
 `tci_sbitx.c`; the tests' side is a stub.
 
 **Threads.** As in maxibitx: one service thread every 5 ms runs the
@@ -198,16 +255,18 @@ the volume, so a client's volume control doesn't drop to the bottom.
 
 ## 6. Coexistence
 
-**Transmit audio (step 4).** While a TCI client holds TX with its own
-audio, that audio is sent, in whatever mode sbitx is in, instead of
-sbitx's own (the microphone, the loopback, the FT8 modem). Otherwise
-sbitx does as it does today.
+**Transmit audio.** While a TCI client holds TX with its own audio, that
+audio is sent instead of sbitx's own (the microphone, the browser's
+microphone, the loopback, the FT8 modem) in USB, LSB, DIGI, FT8 and FT4;
+in AM, FM, CW and CWR such a `trx` is refused (§3.5). Without its own
+audio, sbitx sends what it would for the mode: the loopback in DIGI, FT8
+and FT4, the microphone otherwise. In 2TONE every `trx` is refused. With
+no client holding TX, sbitx does as it did.
 
-CW with source `tci` sends no audio: CW is keyed, not played.
-
-**PTT.** One TCI client at a time will hold TX; the local key, the
-microphone PTT, HPSDR and rigctld keep working as they do. A TCI client
-can't unkey a transmission it didn't start.
+**PTT.** One TCI client at a time holds TX (§3.2); the local key, the
+microphone PTT, HPSDR and rigctld keep working as they do, and any of
+them ending the transmission releases the client. A TCI client can't
+unkey a transmission it didn't start.
 
 **Receiving.** TCI's streams are copies: the loopback, the speaker, the
 panadapters, HPSDR and sbitx's own decoders get what they got before.
@@ -246,9 +305,15 @@ WSJT-X on the loopback and JTDX on TCI can both receive at once.
 3. **Receive streams - built.** The taps in `sound_process()`. Bench:
    `tests/test_tci.c`. To test on the air: JTDX decoding FT8 over TCI
    audio, and sdrOxide showing the spectrum the right way up (§3.3).
-4. **Transmit.** TCI transmit audio with the precedence of §6, `trx`, PTT
-   ownership, the disconnect release. Into a dummy load with JTDX, then
-   on the air.
+4. **Transmit - built.** `trx` and who holds TX (`tci.c`), keying and
+   the transmit audio block (`tci_sbitx.c`), the taps in
+   `sound_process()` and `tx_process()`, FT8 stepping aside
+   (`modems.c`), `upsample48k.c`. Bench: `tests/test_tci.c`,
+   `tests/test_tci_sbitx.c`. To test into a dummy load: JTDX on TCI
+   (Settings - Radio - TCI, audio from TCI) in DIGI and in sbitx's FT8,
+   watching the power and the transmitted spectrum on a second receiver,
+   then on the air; and the loopback with JTDX's audio set to the sound
+   card, which keys with `rtx`.
 5. **CW over TCI.** `cw_msg`, `cw_macros` and the rest, through sbitx's
    CW text path, read back from what is keyed.
 6. **Settings screen and README.**
@@ -257,19 +322,38 @@ WSJT-X on the loopback and JTDX on TCI can both receive at once.
 needs and runs it; nothing in the radio program's own build changes.
 
 - `/tmp/sbitx-test_tci_ws`: 31 checks of the WebSocket server alone.
-- `/tmp/sbitx-test_tci`: 67 checks of the server with a stub radio: the
+- `/tmp/sbitx-test_tci`: 89 checks of the server with a stub radio: the
   burst's order and form; every set echoed to every client, with the value
   in force when it was out of range or not offered; reads answered to the
   asker alone; frequency, mode (uppercase accepted), drive (0 held at 1),
-  volume in dB, mute and rx_mute, CW speed and speed-up; RIT, `trx`,
-  split and XIT answered without setting anything; several commands to a
+  volume in dB, mute and rx_mute, CW speed and speed-up; RIT, split and
+  XIT answered without setting anything; several commands to a
   message; a change elsewhere reaching both clients within about 50 ms,
   and nothing sent while nothing changes; four clients and the fifth
   refused; receive audio and I/Q frames, their headers and samples, with I
-  and Q as given; stopping and starting again on the same port;
-  `decim48k`'s passband and stopband.
+  and Q as given; transmit - `trx:0,true,tci` echoed to every client and
+  keying with the client's own audio, TX_CHRONO to the holder only, its
+  audio reaching the audio thread in order and another client's dropped,
+  another client unable to unkey or take TX, a repeated `trx`, a `trx`
+  the radio refuses answered false with nothing held, release on
+  `trx:0,false` with later audio dropped, `trx` with no source keying with
+  sbitx's audio, `trx` ignored while sbitx transmits for something else,
+  release when TX ends in sbitx, on disconnect and on stopping; stopping
+  and starting again on the same port; `decim48k`'s passband and
+  stopband, and `upsample48k`'s gain and images.
+- `/tmp/sbitx-test_tci_sbitx`: 61 checks of `tci_sbitx.c` with sbitx's
+  fields and command queue stubbed: the TCI setting starting the server;
+  the state published from the fields; the command each `trx` becomes in
+  each mode (`t`, `rtx`, `r`), or its refusal (own audio in AM, FM, CW,
+  CWR; anything in 2TONE); the TX state reported at once, held while
+  sbitx catches up, and dropped after a second if sbitx doesn't key;
+  which modes take the client's audio; its level (0.5 is half of int32
+  full scale), its frequency through the upsampler, clipping without
+  wrapping, silence when the client is late, late audio discarded while
+  receiving, and, between unkeying and sbitx receiving, silence rather
+  than the microphone and FT8 still standing aside.
 
-Both pass on a PC, repeatedly. sbitx's changed files compile with no new
+All three pass on a PC, repeatedly. sbitx's changed files compile with no new
 warnings; the whole program links against stubs for everything but
 wiringPi and the FT8 library.
 
@@ -315,8 +399,10 @@ styles, whose numbering style files and the web UI rely on.
 4. **PSK31 and RTTY are removed, and the whole fldigi link with them**
    (§9).
 5. **Transmit audio precedence:** a TCI client's own transmit audio is
-   sent instead of sbitx's, in whatever mode (§6, step 4).
-6. **First delivery:** steps 0-3; transmit after they have been tried.
+   sent instead of sbitx's, in whatever mode (§6, step 4). As built, that
+   is USB, LSB, DIGI, FT8 and FT4; AM and FM wait on their levels (§11).
+6. **First delivery:** steps 0-3; transmit after they have been tried
+   (built as step 4, for FT8 first).
 7. **At most 4 clients**, a constant, not a setting.
 8. **RIT is reported but not set over TCI**; XIT and split report off.
 
@@ -325,12 +411,16 @@ styles, whose numbering style files and the web UI rely on.
 - **The I/Q's orientation** (§3.3): as reasoned from the code; to confirm
   with sdrOxide.
 - **Audio levels** into WSJT-X and JTDX over TCI, compared with the
-  loopback's; to check on the air.
+  loopback's, and JTDX's transmit level over TCI against the loopback's
+  for the same power setting; to check on the air.
 - **`hamlib.c`'s threading** (§3.1), not part of this work.
 - **Seen in passing, left alone:** the web UI's `cw_keydown()` returns
   early when the mode `== "CWR"` rather than `!= "CWR"`, so typing in the
   web UI's CW window is ignored in CWR. It was so before; removing the
   PSK31 and RTTY terms kept its behaviour.
+- **A program's own audio in AM and FM** (§3.5): refused for now. Sending
+  it needs a level for each, matched to how JTDX or sdrOxide set their
+  output, and a limit in place of the voice clip.
 
 ## 12. Risks
 
