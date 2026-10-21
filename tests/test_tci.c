@@ -2,7 +2,7 @@
 //
 // Bench harness for the TCI server (tci.c, tci_stream.c, tci_ws.c) over
 // loopback, with the radio stubbed (tci_radio.h): the initialization burst
-// and its form, echoes of every set to every client, reads answered to the
+// and its form, the client count, echoes of every set to every client, reads answered to the
 // asker alone, setting frequency, mode, drive, volume, mute and CW speed,
 // RIT refused with the state in force, a change made elsewhere reaching
 // every client, several commands to a message, the client limit, the
@@ -277,7 +277,12 @@ static void test_burst(void) {
   CHECK(strstr(burst, "\nvolume:-20;\n") != NULL, "volume 60%% reads as -20 dB");
   CHECK(strstr(burst, "\ndrive:0,40;\n") && strstr(burst, "\ncw_macros_speed:12;\n"),
         "drive and CW speed");
+  CHECK(tci_client_count() == 1, "one client counted");
   close(fd);
+  long long end = now_ms() + 1000;
+  while (tci_client_count() != 0 && now_ms() < end)
+    usleep(5000);
+  CHECK(tci_client_count() == 0, "and none once it has gone");
 }
 
 static void test_sets_and_echoes(void) {
