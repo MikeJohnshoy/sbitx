@@ -28,6 +28,7 @@
 #include "squelch.h"   // FM squelch gate
 #include "panadapter_fft.h"
 #include "tci_sbitx.h"   // TCI's receive audio and I/Q, and transmit audio
+#include "tci.h"        // tci_iq_center()
 
 // ---------------------------------------------------------------------------
 // CTCSS (sub-audible tone) for FM mode
@@ -2252,7 +2253,7 @@ void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speake
         tx_process(input_rx, input_mic, output_speaker, output_tx, n_samples);
 
         // TCI's receive streams go on, silent, while transmitting
-        tci_sbitx_rx_block(NULL, NULL, NULL, MAX_BINS / 2);
+        tci_sbitx_rx_block(NULL, NULL, NULL, MAX_BINS / 2, 0);
 
     } else {
         tx_from_tci = 0;
@@ -2297,8 +2298,20 @@ void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speake
     hpsdr_send_iq(filt_q, filt_i, MAX_BINS / 2);
 
     // TCI's receive audio (the demodulated audio, before the volume
-    // control) and its I/Q
-    tci_sbitx_rx_block(output_speaker, filt_i, filt_q, MAX_BINS / 2);
+    // control) and its I/Q. The I/Q is centred on freq_hdr, this receiver's
+    // frequency; TCI's clients want it centred on their dds, which a
+    // panadapter keeps while it moves the VFO within its panorama
+    // (tci.c). In CW and CWR the mixer puts a zero-beat signal rx_pitch
+    // above or below the centre (rx_osc_freq_for_mode()), which TCI's
+    // copy takes back out.
+    int tci_shift = 0;
+    if (tci_iq_center())
+        tci_shift = freq_hdr - tci_iq_center();
+    if (rx_list->mode == MODE_CW)
+        tci_shift -= rx_pitch;
+    else if (rx_list->mode == MODE_CWR)
+        tci_shift += rx_pitch;
+    tci_sbitx_rx_block(output_speaker, filt_i, filt_q, MAX_BINS / 2, tci_shift);
   }
 
 	if (pf_record) {
