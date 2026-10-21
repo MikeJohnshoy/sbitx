@@ -190,7 +190,9 @@ first; on an external keyboard type \ directly. Press Enter to execute.
   such as sdrOxide) control the radio and receive its audio and I/Q over the
   network, with no audio cable or CAT port to set up. Up to four programs at
   once. In the program, choose TCI and enter the sBitx's address and the port
-  (\tci_port). TCI doesn't transmit yet. Default: off
+  (\tci_port). A program's own transmit audio over TCI (JTDX's audio set
+  to TCI) is sent in USB, LSB, DIGI, FT8 and FT4, even with sBitx left in
+  FT8 or FT4; in AM, FM, CW and CWR it is refused. Default: off
 
 * \tci_port [1024-65535]
   The network port the TCI server listens on. Default: 50001
