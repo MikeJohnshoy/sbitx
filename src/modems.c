@@ -24,6 +24,7 @@
 #include "sound.h"
 #include "modem_ft8.h"
 #include "modem_cw.h"
+#include "tci_sbitx.h"
 
 typedef float float32_t;
 
@@ -104,7 +105,9 @@ void modem_poll(int mode){
 	switch(mode){
 	case MODE_FT4:
 	case MODE_FT8:
-		ft8_poll(tx_is_on);
+		// a TCI program's transmission: sbitx's FT8 neither ends it nor sends
+		if (!tci_sbitx_tx_engaged())
+			ft8_poll(tx_is_on);
 	break;
 	case MODE_CW:
 	case MODE_CWR:
