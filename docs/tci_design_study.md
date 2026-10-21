@@ -183,22 +183,36 @@ microphone. A client's own audio goes in at the same point: each block,
 before `tx_process()`, `sound_process()` calls `tci_sbitx_tx_block()`,
 which, while a client holds TX with source `tci`, pulls the client's 48 kHz
 audio from `tci_stream.c`'s ring, upsamples it to 96 kHz
-(`upsample48k.c`, unity gain, images 56 dB down), scales it so 1 is int32
-full scale - the loopback's level, so a program's power setting behaves
-as it does with WSJT-X on the loopback - clips anything beyond, and writes
-it over `input_mic`. If the client is late, the rest of the block is
+(`upsample48k.c`, unity gain, images 56 dB down), scales it (below),
+clips anything beyond full scale, and writes it over `input_mic`. If the client is late, the rest of the block is
 silence, and once the transmission is over sbitx prints how much was
 missing if it was more than 100 ms (the first and last blocks always miss
 a little while keying catches up).
+
+**The level.** A program's full scale is made the level of sbitx's own
+FT8 tones, 1/21 of full scale where they reach `tx_process()`
+(`ft8_next_sample()` divides by 7 and `tx_process()` by 3), which is the
+level DRIVE is calibrated for. JTDX in TCI mode sends its audio at full
+scale (0.999, `TCITransceiver::load()`) and does not turn its power
+slider into an audio level, as it does on a sound card: it sends `drive:`
+instead, 100 at 0 dB down to 0 at -45 dB (`do_txvolume()`), which sets
+DRIVE (§3.1), and a DRIVE change on sbitx is sent back to it. So the
+slider and DRIVE are one control, whichever moved last, and a program's
+transmission comes out at the power sbitx's own FT8 would at that DRIVE.
+The first build scaled a program's full scale to int32 full scale, the
+loopback's, which is about 26 dB hotter: on the radio the sidetone (the
+TX audio times SIDETONE, in the modes that aren't voice) was deafening,
+and the transmitter was driven far past the level DRIVE is calibrated
+for. The sidetone is now as loud as for sbitx's own FT8.
 
 It takes precedence (§6, §10) in USB, LSB, DIGI, FT8 and FT4: over the
 microphone, the browser's microphone, the loopback and sbitx's own FT8/FT4
 modem. Being a program's line audio, it skips the voice processing
 (compression, the TX EQ, CESSB, the voice clip). AM and FM take their
 audio at other levels (`input_mic` / 2e8 and / 9.2e7, against / 2e9 in
-the other modes), so at the loopback's level a program would overmodulate
-them tenfold and more, and without the voice clip nothing would limit it;
-CW and CWR are keyed, not played. A `trx` with the client's own audio is
+the other modes), which haven't been checked against a program's, and
+without the voice clip nothing would limit it; CW and CWR are keyed, not
+played. A `trx` with the client's own audio is
 refused in those four (§3.2) rather than sent wrongly; §11.
 
 Between a client's `trx:0,false` and sbitx running the `r` that ends the
@@ -289,6 +303,10 @@ WSJT-X on the loopback and JTDX on TCI can both receive at once.
 - The server listens on every interface; sbitx is normally on a home
   network. `SBITX_TCI_TRACE=1` in the environment prints every message.
 - sbitx stops the server as it exits (`cleanup_on_exit()`).
+- While any client is connected, the frequency readout's top line, where
+  the other VFO is shown, reads **TCI CONTROL ON**; with RIT or SPLIT on,
+  their TX/RX line stays instead (`draw_dial()`, redrawn from `ui_tick()`
+  when the count of clients goes to or from 0, `tci_client_count()`).
 
 ## 8. Order of work, and how each step is tested
 
@@ -322,8 +340,8 @@ WSJT-X on the loopback and JTDX on TCI can both receive at once.
 needs and runs it; nothing in the radio program's own build changes.
 
 - `/tmp/sbitx-test_tci_ws`: 31 checks of the WebSocket server alone.
-- `/tmp/sbitx-test_tci`: 89 checks of the server with a stub radio: the
-  burst's order and form; every set echoed to every client, with the value
+- `/tmp/sbitx-test_tci`: 91 checks of the server with a stub radio: the
+  burst's order and form; the client count; every set echoed to every client, with the value
   in force when it was out of range or not offered; reads answered to the
   asker alone; frequency, mode (uppercase accepted), drive (0 held at 1),
   volume in dB, mute and rx_mute, CW speed and speed-up; RIT, split and
@@ -347,9 +365,9 @@ needs and runs it; nothing in the radio program's own build changes.
   each mode (`t`, `rtx`, `r`), or its refusal (own audio in AM, FM, CW,
   CWR; anything in 2TONE); the TX state reported at once, held while
   sbitx catches up, and dropped after a second if sbitx doesn't key;
-  which modes take the client's audio; its level (0.5 is half of int32
-  full scale), its frequency through the upsampler, clipping without
-  wrapping, silence when the client is late, late audio discarded while
+  which modes take the client's audio; its level (0.5 is half the level
+  of sbitx's own FT8 tones), its frequency through the upsampler,
+  clipping at that level, silence when the client is late, late audio discarded while
   receiving, and, between unkeying and sbitx receiving, silence rather
   than the microphone and FT8 still standing aside.
 
@@ -411,8 +429,11 @@ styles, whose numbering style files and the web UI rely on.
 - **The I/Q's orientation** (§3.3): as reasoned from the code; to confirm
   with sdrOxide.
 - **Audio levels** into WSJT-X and JTDX over TCI, compared with the
-  loopback's, and JTDX's transmit level over TCI against the loopback's
-  for the same power setting; to check on the air.
+  loopback's; and the power a program's FT8 over TCI gives against
+  sbitx's own FT8 at the same DRIVE, which should be the same (§3.5); to
+  check on the air. WSJT-X Improved's TCI support comes from JTDX's, but
+  that it turns its slider into `drive:` too is to confirm with
+  `SBITX_TCI_TRACE=1`.
 - **`hamlib.c`'s threading** (§3.1), not part of this work.
 - **Seen in passing, left alone:** the web UI's `cw_keydown()` returns
   early when the mode `== "CWR"` rather than `!= "CWR"`, so typing in the
