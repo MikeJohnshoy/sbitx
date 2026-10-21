@@ -21,6 +21,11 @@
 // state every 50 ms and sends what changed; the same thread runs
 // tci_stream.c.
 //
+// CW text: cw_macros:0,<text>; is queued, in order (tci_sbitx.c sends it
+// in CW and CWR, through sbitx's keyer); cw_macros_stop; stops it. The
+// protocol reserves : , ; in the text (they are ^ ~ *), but a comma that
+// arrives anyway is kept.
+//
 // Transmit: one client at a time holds TX, from its trx:0,true until its
 // trx:0,false, its disconnecting, or TX ending some other way. With source
 // tci (trx:0,true,tci) its own audio is sent, through TX_CHRONO
@@ -48,7 +53,8 @@
 #define TCI_STATE_TICKS 10 // state sampled every 50 ms
 #define TCI_VFO_MIN 500000
 #define TCI_VFO_MAX 32000000
-#define TCI_MAX_ARGS 8
+#define TCI_MAX_ARGS 16
+#define TCI_CW_TEXT_MAX 512
 
 struct client {
   int in_use, id;
@@ -436,6 +442,13 @@ static void handle(int slot, char *cmd) {
       tci_radio_get(&s);
     }
     pub_wpm(&s);
+  } else if (!strcmp(name, "cw_macros") && trx0 && argc >= 2) {
+    char text[TCI_CW_TEXT_MAX] = "";
+    for (int k = 1; k < argc; k++) // the text, with any commas the split took out
+      snprintf(text + strlen(text), sizeof(text) - strlen(text), "%s%s", k > 1 ? "," : "", argv[k]);
+    tci_radio_cw_text(text);
+  } else if (!strcmp(name, "cw_macros_stop")) {
+    tci_radio_cw_stop();
   } else if (!strcmp(name, "rx_enable") && argc >= 1 && parse_int(argv[0], &v)) {
     tci_send_to(slot, "rx_enable:%lld,%s;", v, tf(v == 0));
   } else if (!strcmp(name, "rx_channel_enable") && argc >= 2 && parse_int(argv[0], &v)) {
