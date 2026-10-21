@@ -41,8 +41,13 @@ int tci_client_count(void);
 // Receive audio at 48 kHz, +-1 full scale.
 void tci_push_audio_rx(const double *samples, int n);
 
-// I/Q at 96 kHz, about +-1 full scale, with a station above the dial at a
-// positive frequency.
+// I/Q at 96 kHz, about +-1 full scale, with a station above the I/Q's
+// centre at a positive frequency. The caller centres it on
+// tci_iq_center().
 void tci_push_iq(const double *i_samples, const double *q_samples, int n);
+
+// Where the clients want the I/Q centred (dds), Hz, or 0 when the server
+// isn't running (any thread).
+int tci_iq_center(void);
 
 #endif /* TCI_H */
