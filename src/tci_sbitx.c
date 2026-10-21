@@ -38,7 +38,11 @@
 // mixer's filtered output, the block HPSDR gets (sound_process(), sbitx.c),
 // with I and Q as they are: HPSDR swaps them, which mirrors the spectrum
 // the way SparkSDR expects, so as they are, a station above the dial is at
-// a positive frequency. While transmitting both are silence.
+// a positive frequency. It is then shifted (sbitx.c works out by how much)
+// to be centred where the clients put dds rather than on sbitx's receive
+// frequency, and in CW and CWR by the pitch the mixer puts a zero-beat
+// signal at, so a client's frequency scale is the true one. While
+// transmitting both are silence.
 //
 // CW TEXT
 //
@@ -96,6 +100,7 @@
 #define RETRY_MS 10000     // after a failed start, wait this long to try again
 #define PENDING_MS 1000
 #define BLOCK_MAX 2048
+#define IQ_SHIFT_MAX 48000 // half the I/Q's width at 96 kHz
 // sbitx's own FT8 sends its tones into tx_process() at 1/21 of full scale
 // (ft8_next_sample()'s /7, tx_process()'s /3), and DRIVE is calibrated for
 // that level. A program's full scale is made the same; tx_process() divides
@@ -460,10 +465,12 @@ void tci_sbitx_tick(void) {
 
 /* ---- The audio thread ---------------------------------------------------------- */
 
-void tci_sbitx_rx_block(const int32_t *speaker, const double *i, const double *q, int n) {
+void tci_sbitx_rx_block(const int32_t *speaker, const double *i, const double *q, int n,
+                        int shift_hz) {
   static struct decim48k_state dec;
   static const double zeros[BLOCK_MAX];
-  double audio[BLOCK_MAX / 2 + 1];
+  static double rot_re = 1.0, rot_im = 0.0; // the I/Q shift's phase, carried on
+  double audio[BLOCK_MAX / 2 + 1], si[BLOCK_MAX], sq[BLOCK_MAX];
   int m = 0;
   if (!tci_running())
     return;
@@ -476,7 +483,25 @@ void tci_sbitx_rx_block(const int32_t *speaker, const double *i, const double *q
       audio[m++] = y;
   }
   tci_push_audio_rx(audio, m);
-  tci_push_iq(i ? i : zeros, q ? q : zeros, n);
+  if (!i || !q || shift_hz == 0 || shift_hz < -IQ_SHIFT_MAX || shift_hz > IQ_SHIFT_MAX) {
+    // beyond the I/Q's width (a retune catching up), silence
+    int off_range = i && q && shift_hz != 0;
+    tci_push_iq(i && !off_range ? i : zeros, q && !off_range ? q : zeros, n);
+    return;
+  }
+  // multiply by e^(j 2 pi shift t), by a rotation per sample
+  double step_re = cos(2 * M_PI * shift_hz / 96000.0), step_im = sin(2 * M_PI * shift_hz / 96000.0);
+  for (int k = 0; k < n; k++) {
+    si[k] = i[k] * rot_re - q[k] * rot_im;
+    sq[k] = i[k] * rot_im + q[k] * rot_re;
+    double re = rot_re * step_re - rot_im * step_im;
+    rot_im = rot_re * step_im + rot_im * step_re;
+    rot_re = re;
+  }
+  double mag = sqrt(rot_re * rot_re + rot_im * rot_im); // keep it on the unit circle
+  rot_re /= mag;
+  rot_im /= mag;
+  tci_push_iq(si, sq, n);
 }
 
 int tci_sbitx_tx_block(int32_t *mic, int n, int mode) {
