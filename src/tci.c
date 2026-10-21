@@ -13,8 +13,13 @@
 // case, several to a message. The server identifies as protocol
 // ExpertSDR3, which JTDX keys its TCI behaviour to, and as device sbitx.
 //
-// One receiver, one VFO: vfo channel B and dds report channel A's
-// frequency, if is always 0. RIT is reported but not set over TCI: a set
+// One receiver, one VFO: vfo channel B reports channel A's frequency.
+// dds is the I/Q's centre and if the VFO's offset from it, vfo = dds + if,
+// as a panadapter (sdrOxide) tunes inside its panorama: it keeps dds and
+// sends if. sbitx has one oscillator, so sbitx's dial goes to dds + if and
+// the I/Q TCI sends is shifted to stay centred on dds (sbitx.c,
+// tci_iq_center()). A vfo set, and the dial moving anywhere else in
+// sbitx, re-centre: dds = vfo, if = 0. RIT is reported but not set over TCI: a set
 // is answered with the value in force. XIT, split, tune and the DSP
 // switches report off. Changes made elsewhere (the screen, the knobs, the
 // web UI, rigctld) have no notification, so a service thread samples the
@@ -53,6 +58,8 @@
 #define TCI_STATE_TICKS 10 // state sampled every 50 ms
 #define TCI_VFO_MIN 500000
 #define TCI_VFO_MAX 32000000
+#define TCI_IF_MIN -48000 // if_limits: the I/Q's half-width at 96 kHz
+#define TCI_IF_MAX 48000
 #define TCI_MAX_ARGS 16
 #define TCI_CW_TEXT_MAX 512
 
@@ -72,6 +79,8 @@ static atomic_int running;
 static pthread_t service_thread;
 static atomic_int tx_owner = -1; // the slot that holds TX, or -1
 static atomic_int n_clients;      // connected
+static int center, if_off;        // dds and if; the dial is center + if_off
+static atomic_int iq_center;      // center, for the audio thread
 
 static long long now_ms(void) {
   struct timespec ts;
@@ -151,8 +160,15 @@ static int volume_percent(int db) { return db <= -50 ? 0 : db >= 0 ? 100 : 100 +
 static const char *tf(int b) { return b ? "true" : "false"; }
 
 // Each sends one piece of state to every client and records it as sent.
+static void set_center(int dds, int offset) {
+  center = dds;
+  if_off = offset;
+  atomic_store(&iq_center, dds);
+}
+
 static void pub_freq(const struct tci_radio_state *s) {
-  tci_broadcast("dds:0,%d;", s->freq);
+  tci_broadcast("dds:0,%d;", center);
+  tci_broadcast("if:0,0,%d;", if_off);
   tci_broadcast("vfo:0,0,%d;", s->freq);
   tci_broadcast("vfo:0,1,%d;", s->freq);
   pub.freq = s->freq;
@@ -196,8 +212,11 @@ static void pub_wpm(const struct tci_radio_state *s) {
 static void publish_changes(void) {
   struct tci_radio_state s;
   tci_radio_get(&s);
-  if (s.freq != pub.freq)
+  if (s.freq != pub.freq) {
+    if (s.freq != center + if_off)
+      set_center(s.freq, 0); // the dial moved elsewhere in sbitx: re-centre
     pub_freq(&s);
+  }
   if (s.mode != pub.mode)
     pub_mode(&s);
   if (s.tx != pub.tx)
@@ -257,6 +276,8 @@ static void cmd_trx(int slot, int on, const char *source) {
 int tci_holds_tx(void) { return atomic_load(&tx_owner) >= 0; }
 
 int tci_client_count(void) { return atomic_load(&n_clients); }
+
+int tci_iq_center(void) { return atomic_load(&running) ? atomic_load(&iq_center) : 0; }
 
 /* ---- Commands ------------------------------------------------------------- */
 
@@ -333,8 +354,10 @@ static void handle(int slot, char *cmd) {
     long long ch = 0;
     parse_int(argv[1], &ch);
     if (argc >= 3) {
-      if (ch == 0 && parse_int(argv[2], &v) && v >= TCI_VFO_MIN && v <= TCI_VFO_MAX)
+      if (ch == 0 && parse_int(argv[2], &v) && v >= TCI_VFO_MIN && v <= TCI_VFO_MAX) {
         tci_radio_set_freq((int)v);
+        set_center((int)v, 0);
+      }
       tci_radio_get(&s);
       pub_freq(&s); // echo, with the frequency in force
     } else {
@@ -343,19 +366,31 @@ static void handle(int slot, char *cmd) {
     }
   } else if (!strcmp(name, "dds") && trx0) {
     if (argc >= 2) {
-      if (parse_int(argv[1], &v) && v >= TCI_VFO_MIN && v <= TCI_VFO_MAX)
-        tci_radio_set_freq((int)v);
+      // the I/Q's centre moves, and the VFO with it, the offset kept
+      if (parse_int(argv[1], &v) && v + if_off >= TCI_VFO_MIN && v + if_off <= TCI_VFO_MAX) {
+        tci_radio_set_freq((int)v + if_off);
+        set_center((int)v, if_off);
+      }
       tci_radio_get(&s);
       pub_freq(&s);
     } else {
-      tci_radio_get(&s);
-      tci_send_to(slot, "dds:0,%d;", s.freq);
+      tci_send_to(slot, "dds:0,%d;", center);
     }
   } else if (!strcmp(name, "if") && trx0 && argc >= 2) {
-    if (argc >= 3)
-      tci_broadcast("if:0,%s,0;", argv[1]); // the offset is always 0
-    else
-      tci_send_to(slot, "if:0,%s,0;", argv[1]);
+    long long ch = -1;
+    parse_int(argv[1], &ch);
+    if (argc >= 3) {
+      // the VFO moves within the panorama, the centre kept
+      if (ch == 0 && parse_int(argv[2], &v) && v >= TCI_IF_MIN && v <= TCI_IF_MAX &&
+          center + v >= TCI_VFO_MIN && center + v <= TCI_VFO_MAX) {
+        tci_radio_set_freq(center + (int)v);
+        set_center(center, (int)v);
+      }
+      tci_radio_get(&s);
+      pub_freq(&s);
+    } else {
+      tci_send_to(slot, "if:0,%lld,%d;", ch, ch == 0 ? if_off : 0);
+    }
   } else if (!strcmp(name, "modulation") && trx0) {
     enum tci_mode m;
     if (argc >= 2 && mode_from_name(argv[1], &m))
@@ -547,12 +582,12 @@ static void send_init(int slot) {
   tci_send_to(slot, "trx_count:1;");
   tci_send_to(slot, "channel_count:1;");
   tci_send_to(slot, "vfo_limits:%d,%d;", TCI_VFO_MIN, TCI_VFO_MAX);
-  tci_send_to(slot, "if_limits:-48000,48000;");
+  tci_send_to(slot, "if_limits:%d,%d;", TCI_IF_MIN, TCI_IF_MAX);
   tci_send_to(slot, "modulations_list:USB,LSB,CW,CWR,DIGU;");
   tci_send_to(slot, "iq_samplerate:%d;", clients[slot].cfg.iq_rate);
   tci_send_to(slot, "audio_samplerate:%d;", clients[slot].cfg.audio_rate);
-  tci_send_to(slot, "dds:0,%d;", s.freq);
-  tci_send_to(slot, "if:0,0,0;");
+  tci_send_to(slot, "dds:0,%d;", center);
+  tci_send_to(slot, "if:0,0,%d;", if_off);
   tci_send_to(slot, "vfo:0,0,%d;", s.freq);
   tci_send_to(slot, "vfo:0,1,%d;", s.freq);
   tci_send_to(slot, "modulation:0,%s;", mode_name(s.mode));
@@ -695,6 +730,7 @@ int tci_init(const char *bind_addr, int port, int max_clients) {
   atomic_store(&tx_owner, -1);
   atomic_store(&n_clients, 0);
   tci_radio_get(&pub);
+  set_center(pub.freq, 0);
   if (ws_server_start(bind_addr, port, max_clients, &cb) < 0)
     return -1;
   atomic_store(&running, 1);
