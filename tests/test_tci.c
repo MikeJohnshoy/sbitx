@@ -4,6 +4,7 @@
 // loopback, with the radio stubbed (tci_radio.h): the initialization burst
 // and its form, the client count, echoes of every set to every client, reads answered to the
 // asker alone, setting frequency, mode, drive, volume, mute and CW speed,
+// dds and if as a panadapter tunes inside its panorama,
 // RIT refused with the state in force, a change made elsewhere reaching
 // every client, several commands to a message, the client limit, the
 // receive audio and I/Q streams (I and Q as given), CW text (cw_macros and
@@ -383,6 +384,59 @@ static void test_sets_and_echoes(void) {
   close(b);
 }
 
+static void test_dds_and_if(void) {
+  printf("dds and if, as a panadapter tunes\n");
+  int a = quick_connect(), b = quick_connect();
+  if (a < 0 || b < 0) {
+    CHECK(0, "two clients");
+    return;
+  }
+  send_text(a, "vfo:0,0,7030000;");
+  CHECK(expect(a, "dds:0,7030000;", 500) && expect(a, "if:0,0,0;", 500) &&
+            tci_iq_center() == 7030000,
+        "a vfo set centres the I/Q on it, if 0");
+  drain(a, 100);
+  drain(b, 100);
+
+  send_text(a, "if:0,0,1500;");
+  CHECK(expect(a, "if:0,0,1500;", 500) && expect(b, "vfo:0,0,7031500;", 500),
+        "if:0,0,1500: echoed, and the VFO is dds + if");
+  CHECK(radio_now().freq == 7031500 && tci_iq_center() == 7030000,
+        "the radio tunes there, the I/Q's centre stays");
+  send_text(a, "dds:0;");
+  CHECK(expect(a, "dds:0,7030000;", 500), "dds reads the centre");
+  send_text(a, "if:0,0;");
+  CHECK(expect(a, "if:0,0,1500;", 500), "if reads the offset");
+  drain(a, 100);
+  drain(b, 100);
+
+  send_text(a, "dds:0,7040000;");
+  CHECK(expect(a, "dds:0,7040000;", 500) && expect(a, "vfo:0,0,7041500;", 500) &&
+            radio_now().freq == 7041500 && tci_iq_center() == 7040000,
+        "a dds set moves the centre and the VFO with it, the offset kept");
+  send_text(a, "if:0,0,-800;");
+  CHECK(expect(a, "vfo:0,0,7039200;", 500) && radio_now().freq == 7039200,
+        "a negative offset");
+  drain(a, 100);
+  send_text(a, "if:0,0,60000;");
+  CHECK(expect(a, "if:0,0,-800;", 500) && radio_now().freq == 7039200,
+        "an offset beyond if_limits: echoed with the one in force");
+  drain(a, 100);
+  drain(b, 100);
+
+  pthread_mutex_lock(&radio_lock);
+  radio.freq = 7055000; // the knob
+  pthread_mutex_unlock(&radio_lock);
+  CHECK(expect(a, "dds:0,7055000;", 500) && expect(a, "if:0,0,0;", 500) &&
+            expect(b, "vfo:0,0,7055000;", 500) && tci_iq_center() == 7055000,
+        "the dial moved elsewhere: re-centred on it, if 0");
+  drain(a, 100);
+  char got[2048];
+  CHECK(collect(a, 200, got, sizeof(got)) == 0, "and nothing more");
+  close(a);
+  close(b);
+}
+
 static void test_changes_elsewhere(void) {
   printf("changes made elsewhere\n");
   int a = quick_connect(), b = quick_connect();
@@ -758,6 +812,7 @@ int main(void) {
   test_burst();
   test_sets_and_echoes();
   test_changes_elsewhere();
+  test_dds_and_if();
   test_tx();
   test_cw_text();
   test_limit();
