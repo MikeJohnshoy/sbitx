@@ -5123,6 +5123,9 @@ void draw_dial(struct field *f, cairo_t *gfx)
 	char buff[20];
 
 	char temp_str[20];
+	// while a TCI program is connected, the top line says so in place of
+	// the other VFO (RIT's and SPLIT's TX/RX lines keep it)
+	const int tci_banner = tci_client_count() > 0;
 
 	fill_rect(gfx, f->x, f->y, f->width, f->height, COLOR_BACKGROUND);
 
@@ -5177,7 +5180,7 @@ void draw_dial(struct field *f, cairo_t *gfx)
 		{
 			strcpy(temp_str, vfo_b->value);
 			sprintf(buff, "B:%s", freq_with_separators(temp_str));
-			draw_text(gfx, f->x + 5, top_y, buff, STYLE_LARGE_FIELD);
+			draw_text(gfx, f->x + 5, top_y, tci_banner ? "TCI CONTROL ON" : buff, STYLE_LARGE_FIELD);
 			sprintf(buff, "A:%s", freq_with_separators(f->value));
 			draw_text(gfx, f->x + 5, bottom_y, buff, STYLE_LARGE_VALUE);
 		}
@@ -5185,7 +5188,7 @@ void draw_dial(struct field *f, cairo_t *gfx)
 		{
 			strcpy(temp_str, vfo_b->value);
 			sprintf(buff, "B:%s", freq_with_separators(temp_str));
-			draw_text(gfx, f->x + 5, top_y, buff, STYLE_LARGE_FIELD);
+			draw_text(gfx, f->x + 5, top_y, tci_banner ? "TCI CONTROL ON" : buff, STYLE_LARGE_FIELD);
 			sprintf(buff, "TX:%s", freq_with_separators(f->value));
 			draw_text(gfx, f->x + 5, bottom_y, buff, STYLE_LARGE_VALUE);
 		}
@@ -5197,7 +5200,7 @@ void draw_dial(struct field *f, cairo_t *gfx)
 			strcpy(temp_str, vfo_a->value);
 			// sprintf(temp_str, "%d", vfo_a_freq);
 			sprintf(buff, "A:%s", freq_with_separators(temp_str));
-			draw_text(gfx, f->x + 5, top_y, buff, STYLE_LARGE_FIELD);
+			draw_text(gfx, f->x + 5, top_y, tci_banner ? "TCI CONTROL ON" : buff, STYLE_LARGE_FIELD);
 			sprintf(buff, "B:%s", freq_with_separators(f->value));
 			draw_text(gfx, f->x + 5, bottom_y, buff, STYLE_LARGE_VALUE);
 		}
@@ -5206,7 +5209,7 @@ void draw_dial(struct field *f, cairo_t *gfx)
 			strcpy(temp_str, vfo_a->value);
 			// sprintf(temp_str, "%d", vfo_a_freq);
 			sprintf(buff, "A:%s", freq_with_separators(temp_str));
-			draw_text(gfx, f->x + 5, top_y, buff, STYLE_LARGE_FIELD);
+			draw_text(gfx, f->x + 5, top_y, tci_banner ? "TCI CONTROL ON" : buff, STYLE_LARGE_FIELD);
 			sprintf(buff, "TX:%s", freq_with_separators(f->value));
 			draw_text(gfx, f->x + 5, bottom_y, buff, STYLE_LARGE_VALUE);
 		}
@@ -10603,6 +10606,17 @@ gboolean ui_tick(gpointer gook)
 	}
 
 	tci_sbitx_tick();
+	{
+		// redraw the dial when a TCI program connects or the last one goes,
+		// for its TCI CONTROL ON line
+		static int tci_banner_shown;
+		int tci_banner = tci_client_count() > 0;
+		if (tci_banner != tci_banner_shown)
+		{
+			tci_banner_shown = tci_banner;
+			update_field(get_field("r1:freq"));
+		}
+	}
 
 	if (panadapter_redraw_tick(&panadapter_redraw_state))
 		update_field(get_field("spectrum"));
