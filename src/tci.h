@@ -7,7 +7,8 @@
 // change made by any of them, or anywhere else in sbitx, is sent to all.
 // docs/tci_design_study.md.
 //
-// It doesn't transmit yet: trx is answered with the state in force.
+// One client at a time holds TX (tci.c), sending its own audio or
+// sbitx's.
 
 #ifndef TCI_H
 #define TCI_H
@@ -26,10 +27,13 @@ void tci_stop(void);
 // Nonzero between tci_init() and tci_stop().
 int tci_running(void);
 
+// Nonzero while a client holds TX (any thread).
+int tci_holds_tx(void);
+
 // ---- Audio thread ---------------------------------------------------------
 //
 // Neither blocks, locks or allocates; each returns at once when no client
-// has started that stream.
+// has started that stream. Transmit audio is tci_stream.h's.
 
 // Receive audio at 48 kHz, +-1 full scale.
 void tci_push_audio_rx(const double *samples, int n);
