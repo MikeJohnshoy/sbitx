@@ -271,6 +271,15 @@ static uint8_t cw_last_symbol = CW_IDLE;
 static uint8_t cw_mode = CW_STRAIGHT;
 static int cw_bytes_available = 0;
 
+// Speed changes inside the text: each CW_SPEED_DOWN or CW_SPEED_UP the
+// keyer reads sends what follows CW_SPEED_STEP WPM slower or faster than
+// WPM; cw_stop_text() and cw_abort() go back to WPM. TCI's cw_macros uses
+// them (tci_cw.c), and so can the TEXT field.
+static int cw_speed_offset = 0;
+static int cw_wpm_base = INIT_WPM;   // WPM, as cw_poll() last read it
+static volatile int cw_text_stop = 0; // cw_stop_text() asked, for the audio thread
+static unsigned cw_key_presses = 0;   // key or paddle closures, from cw_poll()
+
 extern int text_ready;  // flag that TEXT buffer in gui is ready to send
 extern int cw_decode_enabled;  // flag that UI has enabled cw decoding
 
@@ -508,7 +517,18 @@ static uint8_t cw_get_next_symbol(){  //symbol to translate into CW_DOT, CW_DASH
 //cw_read_key() is called 96000 times a second
 //it should not poll gpio lines or text input, those are done in modem_poll()
 //and we only read the status from the variable updated by modem_poll()
+static int cw_tx_wpm(void) {
+    int wpm = cw_wpm_base + cw_speed_offset;
+    return wpm < CW_WPM_MIN ? CW_WPM_MIN : wpm > CW_WPM_MAX ? CW_WPM_MAX : wpm;
+}
+
 static int cw_read_key(){
+    // cw_stop_text(): the element in progress completes, the rest of the
+    // character doesn't
+    if (cw_text_stop) {
+        cw_text_stop = 0;
+        symbol_next = NULL;
+    }
     //process cw key before other cw inputs (macros, keyboard)
     if (cw_key_state != CW_IDLE)
         return cw_key_state;
@@ -522,7 +542,15 @@ static int cw_read_key(){
         return CW_IDLE;
 
     char c;
-    get_tx_data_byte(&c);
+    // speed codes take no time: change the speed and read on
+    for (;;) {
+        if (!get_tx_data_byte(&c))
+            return CW_IDLE;
+        if (c != CW_SPEED_DOWN && c != CW_SPEED_UP)
+            break;
+        cw_speed_offset += c == CW_SPEED_UP ? CW_SPEED_STEP : -CW_SPEED_STEP;
+        cw_period = (12 * 9600) / cw_tx_wpm();
+    }
 
     const unsigned char uc = (unsigned char)c;
     // fast lookup; table contains lowercase entries, and we also mapped uppercase
@@ -2113,8 +2141,12 @@ char *cw_get_stats(char *buf, size_t len)
 // decoder.wpm and decoder.dot_len, cw_tx_until, cw_mode) and may call tx_on(TX_SOFT)
 // or tx_off() to start/stop transmission
 void cw_poll(int bytes_available, int tx_is_on) {
+  static int key_was = CW_IDLE;
   cw_bytes_available = bytes_available;
   cw_key_state = key_poll();
+  if (cw_key_state != CW_IDLE && key_was == CW_IDLE)
+    cw_key_presses++;
+  key_was = cw_key_state;
   millis_now = millis();
 
   // cache UI-derived break-in delay here so audio path reads cw_delay_ms only (not the GUI value)
@@ -2122,14 +2154,18 @@ void cw_poll(int bytes_available, int tx_is_on) {
 
   // WPM: recompute period every poll, but only touch the
   // decoder/tx_decoder state when WPM actually changes ---
+  // the receive decoder starts from WPM; sending, and the decoder of what
+  // is sent, follow the speed codes too
   int wpm = field_int("WPM");
-  cw_period = (12 * 9600) / wpm;
+  cw_wpm_base = wpm;
+  int tx_wpm = cw_tx_wpm();
+  cw_period = (12 * 9600) / tx_wpm;
   if (wpm != decoder.wpm) {
     decoder.wpm = wpm;
     decoder.dot_len = (6 * SAMPLING_FREQ) / (5 * CW_HOP * wpm);
   }
-  if (wpm != tx_decoder.wpm) {
-    tx_decoder.wpm = wpm;
+  if (tx_wpm != tx_decoder.wpm) {
+    tx_decoder.wpm = tx_wpm;
   }
 
   // retune RX pitch if needed
@@ -2183,4 +2219,14 @@ void cw_abort() {
 	keyup_count = 0;
 	cw_tx_until = 0;
 	symbol_next = NULL;
+	cw_speed_offset = 0;
+}
+
+void cw_stop_text(void) {
+	cw_text_stop = 1;
+	cw_speed_offset = 0;
+}
+
+unsigned cw_key_press_count(void) {
+	return cw_key_presses;
 }
