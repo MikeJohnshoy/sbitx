@@ -1,7 +1,8 @@
 // tci_sbitx.c
 //
 // sbitx's side of the TCI server: tci_radio.h for tci.c, the TCI and
-// TCI_PORT settings, and the receive streams. docs/tci_design_study.md.
+// TCI_PORT settings, the receive streams and transmit audio.
+// docs/tci_design_study.md.
 //
 // THREADS
 //
@@ -38,6 +39,24 @@
 // with I and Q as they are: HPSDR swaps them, which mirrors the spectrum
 // the way SparkSDR expects, so as they are, a station above the dial is at
 // a positive frequency. While transmitting both are silence.
+//
+// TRANSMIT
+//
+// A client's trx keys sbitx with its own commands: t to transmit, r to
+// receive, and rtx in DIGI, FT8 and FT4 when the client doesn't send its
+// own audio, which takes the audio from the loopback as rigctld's PTT does
+// for WSJT-X. With its own audio (trx:0,true,tci), that audio replaces
+// whatever sbitx would send in USB, LSB, DIGI, FT8 and FT4: it is pulled
+// at 48 kHz, upsampled to 96 kHz and scaled so 1 is int32 full scale, the
+// loopback's level, and goes into tx_process() as the microphone would,
+// without the voice processing (compression, EQ, CESSB, the voice clip),
+// since it is a program's line audio. In AM, FM, CW and CWR, which take
+// their audio at other levels or none, a trx with its own audio is
+// refused; in 2TONE, any trx. While a client holds TX, and until sbitx has
+// run the r that ends it, sbitx's own FT8/FT4 modem steps aside (modems.c):
+// it neither ends the transmission nor sends its own; and for the last
+// blocks before r runs, a client's own-audio TX sends silence rather than
+// the microphone.
 
 #include "tci_sbitx.h"
 #include "decim48k.h"
@@ -45,8 +64,11 @@
 #include "sdr_ui.h"
 #include "tci.h"
 #include "tci_radio.h"
+#include "tci_stream.h"
+#include "upsample48k.h"
 #include <math.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -57,6 +79,9 @@
 #define RETRY_MS 10000     // after a failed start, wait this long to try again
 #define PENDING_MS 1000
 #define BLOCK_MAX 2048
+// A transmission's first and last blocks go without the client's audio
+// while keying catches up; report a shortfall only beyond that.
+#define TX_SHORT_REPORT_MS 100
 
 extern int in_tx;
 extern int audio_muted;         // sbitx_gtk.c: MUTE sets AUDIO to 0 and
@@ -71,7 +96,12 @@ struct pending {
   int active, value;
   long long until;
 };
-static struct pending p_freq, p_mode, p_drive, p_volume, p_mute, p_wpm;
+static struct pending p_freq, p_mode, p_drive, p_volume, p_mute, p_wpm, p_tx;
+static atomic_int tx_short; // TX audio samples the client didn't send in time
+// A client's TX has been unkeyed, and sbitx hasn't yet run the r that ends
+// it: the audio thread sends silence rather than the microphone, and
+// sbitx's FT8 still stands aside. Cleared by the GTK thread once in_tx is 0.
+static atomic_int tx_finishing, tx_was_own_audio;
 
 static long long now_ms(void) {
   struct timespec ts;
@@ -119,6 +149,7 @@ void tci_radio_get(struct tci_radio_state *s) {
   take(&p_volume, &s->volume);
   take(&p_mute, &s->mute);
   take(&p_wpm, &s->wpm);
+  take(&p_tx, &s->tx);
   s->mode = (enum tci_mode)mode;
   pthread_mutex_unlock(&state_lock);
 }
@@ -185,6 +216,39 @@ void tci_radio_set_wpm(int wpm) {
   setfield_int("#tx_wpm", wpm);
 }
 
+static int is_ftx_or_digi(const char *sbitx_mode) {
+  return !strcmp(sbitx_mode, "DIGI") || !strcmp(sbitx_mode, "FT8") || !strcmp(sbitx_mode, "FT4");
+}
+
+// The modes a client's own audio is sent in (and tci_sbitx_tx_block()'s).
+static int takes_audio(const char *sbitx_mode) {
+  return is_ftx_or_digi(sbitx_mode) || !strcmp(sbitx_mode, "USB") || !strcmp(sbitx_mode, "LSB");
+}
+
+int tci_radio_set_tx(int on, int own_audio) {
+  char now[16];
+  pthread_mutex_lock(&state_lock);
+  strcpy(now, published_mode);
+  pthread_mutex_unlock(&state_lock);
+  if (on && (!strcmp(now, "2TONE") || (own_audio && !takes_audio(now)))) {
+    printf("tci: TX refused - %s doesn't send %s\n", now,
+           own_audio ? "a program's audio" : "for a program");
+    return -1;
+  }
+  hold(&p_tx, on != 0);
+  if (on) {
+    atomic_store(&tx_finishing, 0);
+    atomic_store(&tx_was_own_audio, own_audio != 0);
+    remote_execute(!own_audio && is_ftx_or_digi(now) ? "rtx" : "t"); // rtx: the loopback's audio
+  } else {
+    atomic_store(&tx_finishing, 1);
+    remote_execute("r");
+  }
+  return 0;
+}
+
+int tci_sbitx_tx_engaged(void) { return tci_holds_tx() || atomic_load(&tx_finishing); }
+
 /* ---- The GTK thread ---------------------------------------------------------- */
 
 static double strength_dbm(void) {
@@ -240,13 +304,27 @@ static void follow_settings(void) {
   }
 }
 
+// Once a transmission is over, how much of its audio the client was late
+// with, if more than keying accounts for.
+static void report_tx_short(void) {
+  if (tci_holds_tx())
+    return;
+  int n = atomic_exchange(&tx_short, 0);
+  if (n > TX_SHORT_REPORT_MS * 48)
+    printf("tci: the client's TX audio was %d ms short\n", n / 48);
+}
+
 void tci_sbitx_tick(void) {
   static int ticks;
   ticks++;
+  if (!in_tx && atomic_load(&tx_finishing))
+    atomic_store(&tx_finishing, 0); // the r has run
   if (ticks % SETTINGS_TICKS == 0)
     follow_settings();
-  if (ticks % PUBLISH_TICKS == 0 && tci_running())
+  if (ticks % PUBLISH_TICKS == 0 && tci_running()) {
     publish();
+    report_tx_short();
+  }
 }
 
 /* ---- The audio thread ---------------------------------------------------------- */
@@ -268,4 +346,44 @@ void tci_sbitx_rx_block(const int32_t *speaker, const double *i, const double *q
   }
   tci_push_audio_rx(audio, m);
   tci_push_iq(i ? i : zeros, q ? q : zeros, n);
+}
+
+int tci_sbitx_tx_block(int32_t *mic, int n, int mode) {
+  static struct upsample48k_state up;
+  double in48[BLOCK_MAX / 2 + 1];
+  int takes = mode == MODE_DIGITAL || mode == MODE_FT8 || mode == MODE_FT4 || mode == MODE_USB ||
+              mode == MODE_LSB;
+  if (takes && !tci_tx_audio_owned() && atomic_load(&tx_finishing) &&
+      atomic_load(&tx_was_own_audio)) {
+    memset(mic, 0, (size_t)n * sizeof(*mic)); // the last blocks before r runs
+    tci_tx_audio_idle();
+    return 1;
+  }
+  if (!takes || !tci_tx_audio_owned()) {
+    tci_tx_audio_idle();
+    return 0;
+  }
+  if (n > BLOCK_MAX)
+    n = BLOCK_MAX;
+  int need = (n + 1) / 2;
+  int got = tci_pull_audio_tx(in48, need);
+  if (got < need)
+    atomic_fetch_add(&tx_short, need - got);
+  int o = 0;
+  for (int k = 0; k < need; k++) {
+    double out2[2];
+    // past what the client sent, silence, so the filter's history runs on
+    upsample48k_apply(&up, k < got ? in48[k] : 0.0, out2);
+    for (int j = 0; j < 2 && o < n; j++) {
+      double x = out2[j] > 1.0 ? 1.0 : out2[j] < -1.0 ? -1.0 : out2[j];
+      mic[o++] = (int32_t)lrint(x * 2147483647.0);
+    }
+  }
+  return 1;
+}
+
+void tci_sbitx_tx_idle(void) {
+  // keyed but not yet transmitting: keep what the client has sent so far
+  if (!tci_holds_tx())
+    tci_tx_audio_idle();
 }
