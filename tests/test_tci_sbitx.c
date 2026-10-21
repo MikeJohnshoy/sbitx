@@ -7,7 +7,10 @@
 // sbitx shows it, and the transmit audio block - which modes take a
 // client's audio, its level (full scale is sbitx's own FT8 tones' level), clipping, the 48 to 96 kHz upsampling,
 // silence when the client is late, and silence rather than the microphone
-// between a client's unkeying and sbitx receiving again. The harness plays the GTK and audio threads itself.
+// between a client's unkeying and sbitx receiving again; and CW text -
+// TCI's markup translated for sbitx's keyer, and the queue into the TEXT
+// field: CW and CWR only, in order past the field's length, stopped by
+// cw_macros_stop or the key, dropped on leaving CW. The harness plays the GTK and audio threads itself.
 // Built and run by make test, as /tmp/sbitx-test_tci_sbitx.
 
 #define _GNU_SOURCE
@@ -15,6 +18,7 @@
 #include "tci.h"
 #include "tci_radio.h"
 #include "tci_sbitx.h"
+#include "tci_cw.h"
 #include "tci_stream.h"
 #include <math.h>
 #include <stdio.h>
@@ -73,6 +77,34 @@ static int cmds;
 void remote_execute(char *cmd) {
   snprintf(last_cmd, sizeof(last_cmd), "%s", cmd);
   cmds++;
+}
+
+// The keyer's queue, the TEXT field, and the key
+static char text_field[128];
+static int text_clears;
+static unsigned key_presses;
+int cw_text_append(const char *text) {
+  int len = (int)strlen(text_field), room = (int)sizeof(text_field) - 1 - len;
+  int n = (int)strlen(text);
+  if (n > room)
+    n = room;
+  memcpy(text_field + len, text, (size_t)n);
+  text_field[len + n] = '\0';
+  return n;
+}
+void cw_text_clear(void) {
+  text_field[0] = '\0';
+  text_clears++;
+}
+unsigned cw_key_press_count(void) { return key_presses; }
+int get_tx_data_length(void) { return (int)strlen(text_field); }
+
+// The keyer sends n characters
+static void keyer_takes(int n) {
+  int len = (int)strlen(text_field);
+  if (n > len)
+    n = len;
+  memmove(text_field, text_field + n, (size_t)(len - n) + 1);
 }
 
 static void ticks(int n) {
@@ -277,11 +309,115 @@ static void test_tx_audio(void) {
   ticks(1);
 }
 
+static void test_translate(void) {
+  printf("TCI CW text to sbitx's keyer\n");
+  static const struct {
+    const char *in, *out;
+  } cases[] = {{"CQ TEST DE KB2ML", "CQ TEST DE KB2ML"},
+               {"cq de kb2ml k", "cq de kb2ml k"},
+               {"|AR| |sk| |BT| |KN| |AS| |BK|", "+ > = ( & <"},
+               {"|HH| |XY|", "HH XY"},
+               {"TU <5NN> TU", "TU [5NN] TU"},
+               {"<<5NN", "[[5NN]]"},
+               {">599", "]599["},
+               {"a^b~c*d", "a:b,c;d"},
+               {"5NN\tTU\n", "5NN TU "},
+               {"?./-'!)(\"@$+=&_", "?./-'!)(\"@$+=&_"}};
+  for (size_t k = 0; k < sizeof(cases) / sizeof(cases[0]); k++) {
+    char out[64], skipped[16];
+    tci_cw_translate(cases[k].in, out, sizeof(out), skipped, sizeof(skipped));
+    CHECK(!strcmp(out, cases[k].out) && !skipped[0], "\"%s\" -> \"%s\"", cases[k].in, out);
+  }
+  char out[64], skipped[16];
+  tci_cw_translate("A[B]C\\D{E}#%|F", out, sizeof(out), skipped, sizeof(skipped));
+  CHECK(!strcmp(out, "ABCDEF") && !strcmp(skipped, "[]\\{}#%|"),
+        "what sbitx can't send is left out and reported (%s, %s)", out, skipped);
+  char small[8];
+  tci_cw_translate("<<ABCDEFGH", small, sizeof(small), NULL, 0);
+  CHECK(!strcmp(small, "[[ABC]]"), "cut short, it still ends at WPM (%s)", small);
+}
+
+static void test_cw_queue(void) {
+  printf("CW text into the keyer's queue\n");
+  set("MODE", "USB");
+  ticks(10);
+  tci_radio_cw_text("CQ");
+  ticks(5);
+  CHECK(!text_field[0], "refused outside CW and CWR");
+
+  set("MODE", "CW");
+  ticks(10);
+  tci_radio_cw_text("CQ TEST");
+  ticks(1);
+  CHECK(!strcmp(text_field, "CQ TEST"), "in CW, into the TEXT field (%s)", text_field);
+  tci_radio_cw_text("DE KB2ML <5NN>");
+  ticks(1);
+  CHECK(!strcmp(text_field, "CQ TEST DE KB2ML [5NN]"),
+        "the next after it, translated, a word space between (%s)", text_field);
+  keyer_takes(100);
+  ticks(1);
+  tci_radio_cw_text("TU");
+  ticks(1);
+  CHECK(!strcmp(text_field, "TU"), "no space before one that starts an empty queue (%s)",
+        text_field);
+  keyer_takes(100);
+  ticks(1);
+
+  char longer[400] = "", expect[400] = "";
+  for (int k = 0; k < 30; k++)
+    strcat(longer, "ABCDEFGHI ");
+  strcpy(expect, longer);
+  tci_radio_cw_text(longer);
+  ticks(1);
+  char sent[400] = "";
+  CHECK(strlen(text_field) == 127, "a long text fills the field (%zu)", strlen(text_field));
+  for (int k = 0; k < 20 && strlen(sent) < strlen(expect); k++) {
+    strncat(sent, text_field, 40);
+    keyer_takes(40);
+    ticks(1);
+  }
+  CHECK(!strcmp(sent, expect), "and the rest follows in order as the keyer sends it");
+  ticks(1);
+
+  int clears = text_clears;
+  tci_radio_cw_text("CQ CQ");
+  ticks(1);
+  tci_radio_cw_stop();
+  ticks(1);
+  CHECK(!text_field[0] && text_clears == clears + 1, "cw_macros_stop empties the queue");
+
+  clears = text_clears;
+  for (int k = 0; k < 10; k++)
+    tci_radio_cw_text("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+  ticks(1);
+  key_presses++; // the operator keys
+  ticks(1);
+  keyer_takes(200);
+  ticks(5);
+  CHECK(!text_field[0] && text_clears == clears + 1, "the key closing stops TCI text");
+  key_presses++;
+  ticks(1);
+  CHECK(text_clears == clears + 1, "and keying with no TCI text stops nothing");
+
+  clears = text_clears;
+  for (int k = 0; k < 10; k++)
+    tci_radio_cw_text("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+  ticks(1);
+  set("MODE", "USB"); // sbitx's mode change clears the field itself
+  text_field[0] = '\0';
+  ticks(10);
+  set("MODE", "CW");
+  ticks(10);
+  CHECK(!text_field[0] && text_clears == clears, "leaving CW drops what was waiting");
+}
+
 int main(void) {
   tci_stream_init();
   test_setting_and_state();
   test_trx_commands();
   test_tx_audio();
+  test_translate();
+  test_cw_queue();
   tci_stop();
   printf(failures ? "\n%d check(s) FAILED\n" : "\nall checks passed\n", failures);
   return failures ? 1 : 0;
