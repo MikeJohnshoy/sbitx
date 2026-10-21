@@ -21,7 +21,12 @@
 // state every 50 ms and sends what changed; the same thread runs
 // tci_stream.c.
 //
-// TCI doesn't transmit yet: trx is answered with the state in force.
+// Transmit: one client at a time holds TX, from its trx:0,true until its
+// trx:0,false, its disconnecting, or TX ending some other way. With source
+// tci (trx:0,true,tci) its own audio is sent, through TX_CHRONO
+// (tci_stream.c); without, sbitx's usual audio is. Another client's trx is
+// ignored while one holds TX, and so is any trx while something else in
+// sbitx is transmitting or the radio refuses it in its mode.
 
 #define _GNU_SOURCE
 #include "tci.h"
@@ -59,6 +64,7 @@ static struct tci_radio_state pub; // as last sent to the clients
 static int trace;                  // SBITX_TCI_TRACE: print every message
 static atomic_int running;
 static pthread_t service_thread;
+static atomic_int tx_owner = -1; // the slot that holds TX, or -1
 
 static long long now_ms(void) {
   struct timespec ts;
@@ -203,6 +209,46 @@ static void publish_changes(void) {
     pub_wpm(&s);
 }
 
+/* ---- Transmit ------------------------------------------------------------ */
+
+static void tx_release(void) {
+  atomic_store(&tx_owner, -1);
+  tci_stream_tx_end();
+}
+
+static void cmd_trx(int slot, int on, const char *source) {
+  struct tci_radio_state s;
+  tci_radio_get(&s);
+  int owner = atomic_load(&tx_owner);
+  if (owner >= 0 && owner != slot) {
+    printf("tci: trx from client %d ignored - client %d holds TX\n", slot, owner);
+  } else if (on && owner < 0 && s.tx) {
+    printf("tci: trx from client %d ignored - sbitx is already transmitting\n", slot);
+  } else if (on && owner == slot) {
+    // already holds TX: the echo below
+  } else if (on) {
+    int own_audio = !strcasecmp(source, "tci");
+    if (own_audio)
+      tci_stream_tx_begin(slot, clients[slot].buffering_ms);
+    if (tci_radio_set_tx(1, own_audio) < 0) {
+      if (own_audio)
+        tci_stream_tx_end();
+    } else {
+      atomic_store(&tx_owner, slot);
+      printf("tci: client %d TX on, %s\n", slot,
+             own_audio ? "with its own audio" : "with sbitx's audio");
+    }
+  } else if (owner == slot) {
+    tci_radio_set_tx(0, 0);
+    tx_release();
+    printf("tci: client %d TX off\n", slot);
+  }
+  tci_radio_get(&s);
+  pub_tx(&s);
+}
+
+int tci_holds_tx(void) { return atomic_load(&tx_owner) >= 0; }
+
 /* ---- Commands ------------------------------------------------------------- */
 
 static int parse_bool(const char *s, int *v) {
@@ -311,12 +357,10 @@ static void handle(int slot, char *cmd) {
     else
       tci_send_to(slot, "modulation:0,%s;", mode_name(s.mode));
   } else if (!strcmp(name, "trx") && trx0) {
-    tci_radio_get(&s);
     if (argc >= 2 && parse_bool(argv[1], &b)) {
-      if (b)
-        printf("tci: client %d asked to transmit - TCI doesn't transmit yet\n", slot);
-      pub_tx(&s);
+      cmd_trx(slot, b, argc >= 3 ? argv[2] : "");
     } else {
+      tci_radio_get(&s);
       tci_send_to(slot, "trx:0,%s;", tf(s.tx));
     }
   } else if (!strcmp(name, "drive") && trx0) {
@@ -405,7 +449,7 @@ static void handle(int slot, char *cmd) {
       c->rx_sensors_ms = v < 30 ? 30 : v > 1000 ? 1000 : (int)v;
     c->rx_sensors_due = now_ms();
   } else if (!strcmp(name, "tx_sensors_enable")) {
-    // accepted; nothing is sent, since TCI doesn't transmit yet
+    // accepted; sbitx sends no transmit sensors yet
   } else if ((!strcmp(name, "audio_start") || !strcmp(name, "audio_stop")) && trx0) {
     c->cfg.audio_on = !strcmp(name, "audio_start");
     apply_stream(slot);
@@ -554,7 +598,7 @@ static void on_binary(int id, const uint8_t *data, size_t len) {
   int slot = ws_client_slot(id);
   pthread_mutex_lock(&lock);
   if (clients[slot].in_use && clients[slot].id == id)
-    tci_stream_tx_frame(slot, data, len); // dropped: no client holds TX
+    tci_stream_tx_frame(slot, data, len); // dropped unless it holds TX with its own audio
   pthread_mutex_unlock(&lock);
 }
 
@@ -562,6 +606,11 @@ static void on_close(int id) {
   int slot = ws_client_slot(id);
   pthread_mutex_lock(&lock);
   if (clients[slot].in_use && clients[slot].id == id) {
+    if (atomic_load(&tx_owner) == slot) {
+      tci_radio_set_tx(0, 0);
+      tx_release();
+      printf("tci: client %d disconnected while holding TX - TX off\n", slot);
+    }
     tci_stream_close(slot);
     clients[slot].in_use = 0;
     printf("tci: client %d disconnected\n", slot);
@@ -603,6 +652,12 @@ static void *service_main(void *arg) {
     pthread_mutex_lock(&lock);
     tci_stream_service();
     if (tick % TCI_STATE_TICKS == 0) {
+      struct tci_radio_state s;
+      tci_radio_get(&s);
+      if (atomic_load(&tx_owner) >= 0 && !s.tx) {
+        printf("tci: client %d's TX ended in sbitx\n", atomic_load(&tx_owner));
+        tx_release();
+      }
       publish_changes();
       rx_sensors();
     }
@@ -619,6 +674,7 @@ int tci_init(const char *bind_addr, int port, int max_clients) {
   trace = t && *t && strcmp(t, "0");
   tci_stream_init();
   memset(clients, 0, sizeof(clients));
+  atomic_store(&tx_owner, -1);
   tci_radio_get(&pub);
   if (ws_server_start(bind_addr, port, max_clients, &cb) < 0)
     return -1;
@@ -638,6 +694,12 @@ void tci_stop(void) {
   ws_server_stop();
   atomic_store(&running, 0);
   pthread_join(service_thread, NULL);
+  pthread_mutex_lock(&lock); // in case the owner's reader didn't finish in time
+  if (atomic_load(&tx_owner) >= 0) {
+    tci_radio_set_tx(0, 0);
+    tx_release();
+  }
+  pthread_mutex_unlock(&lock);
   printf("tci: stopped\n");
 }
 
