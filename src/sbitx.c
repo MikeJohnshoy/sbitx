@@ -27,7 +27,7 @@
 #include "hpsdr_p1.h"  // demonstrates using I and Q for other uses
 #include "squelch.h"   // FM squelch gate
 #include "panadapter_fft.h"
-#include "tci_sbitx.h"   // TCI's receive audio and I/Q
+#include "tci_sbitx.h"   // TCI's receive audio and I/Q, and transmit audio
 
 // ---------------------------------------------------------------------------
 // CTCSS (sub-audible tone) for FM mode
@@ -1808,6 +1808,8 @@ void read_power()
 
 
 static int tx_process_restart = 1;
+// this block's input_mic holds a TCI program's own audio (sound_process())
+static int tx_from_tci = 0;
 
 void tx_process(
 	int32_t *input_rx, int32_t *input_mic,
@@ -1818,7 +1820,8 @@ void tx_process(
 	double i_sample, q_sample, i_carrier;
 	// Check if browser microphone is active and use it instead of physical mic
 	int32_t browser_mic_samples[n_samples];
-	int use_browser_mic = is_browser_mic_active();
+	// a TCI program's own audio takes precedence over the browser's mic
+	int use_browser_mic = is_browser_mic_active() && !tx_from_tci;
 
 	if (use_browser_mic) {
 		// Get upsampled browser mic audio
@@ -1841,7 +1844,8 @@ void tx_process(
 		eq_initialized = 1;
 	}
 
-	if (in_tx && (r->mode != MODE_DIGITAL && r->mode != MODE_FT8 && r->mode != MODE_FT4 && r->mode != MODE_2TONE && r->mode != MODE_CW && r->mode != MODE_CWR))
+	// voice processing, but not for a TCI program's line audio
+	if (in_tx && !tx_from_tci && (r->mode != MODE_DIGITAL && r->mode != MODE_FT8 && r->mode != MODE_FT4 && r->mode != MODE_2TONE && r->mode != MODE_CW && r->mode != MODE_CWR))
 	{
 
 		// Apply compression is the value of the dial is set to 1-10 (0 = off)
@@ -1928,7 +1932,9 @@ void tx_process(
 			i_sample = (1.0 * (vfo_read(&tone_a) + vfo_read(&tone_b))) / 50000000000.0;
 		else if (r->mode == MODE_CALIBRATE)
 			i_sample = (1.0 * (vfo_read(&tone_a))) / 30000000000.0;
-		else if (r->mode == MODE_CW || r->mode == MODE_CWR || r->mode == MODE_FT8 || r->mode == MODE_FT4)
+		// FT8/FT4: sbitx's own modem, unless a TCI program's TX is on
+		else if (r->mode == MODE_CW || r->mode == MODE_CWR
+				 || ((r->mode == MODE_FT8 || r->mode == MODE_FT4) && !tci_sbitx_tx_engaged()))
 			i_sample = modem_next_sample(r->mode) / 3;
 		else if (r->mode == MODE_AM)
 		{
@@ -2042,7 +2048,7 @@ void tx_process(
 		}
 
 		// clip the overdrive to prevent damage up the processing chain, PA
-		if (r->mode == MODE_USB || r->mode == MODE_LSB || r->mode == MODE_AM)
+		if (!tx_from_tci && (r->mode == MODE_USB || r->mode == MODE_LSB || r->mode == MODE_AM))
 		{
 			i_sample_max = fmax(i_sample, i_sample_max); // find peak value
 			i_sample_max = 0.5 * i_sample_max + 0.5 * i_sample_old;
@@ -2238,6 +2244,10 @@ static void fir_lpf_iq(const double *in_i, const double *in_q,
 void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speaker,
                    int32_t *output_tx, int n_samples) {
     if (in_tx) {
+        // a TCI program holding TX with its own audio: it replaces the
+        // microphone or loopback in input_mic (tci_sbitx.c)
+        tx_from_tci = tci_sbitx_tx_block(input_mic, MAX_BINS / 2, tx_list->mode);
+
         // tx_process continues to operate on real samples for now
         tx_process(input_rx, input_mic, output_speaker, output_tx, n_samples);
 
@@ -2245,6 +2255,9 @@ void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speake
         tci_sbitx_rx_block(NULL, NULL, NULL, MAX_BINS / 2);
 
     } else {
+        tx_from_tci = 0;
+        tci_sbitx_tx_idle();
+
         // generate I and Q data from the real input before passing samples to rx_linear()
         // Note: this also downconverts to baseband
         double iq_i[MAX_BINS / 2];
