@@ -15,8 +15,11 @@ void tci_sbitx_tick(void);
 
 // The audio thread, once per block of n samples at 96 kHz: the
 // demodulated audio (sound_process()'s output_speaker) and the I/Q, or
-// NULL for both while transmitting, which sends silence.
-void tci_sbitx_rx_block(const int32_t *speaker, const double *i, const double *q, int n);
+// NULL for both while transmitting, which sends silence. The I/Q is
+// shifted up by shift_hz (sbitx.c: to centre it on tci_iq_center(), and
+// in CW by the pitch); a shift beyond its width sends silence.
+void tci_sbitx_rx_block(const int32_t *speaker, const double *i, const double *q, int n,
+                        int shift_hz);
 
 // The audio thread, once per block while transmitting, before
 // tx_process(): if a client holds TX with its own audio and the mode takes
