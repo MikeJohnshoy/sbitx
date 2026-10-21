@@ -5,7 +5,7 @@
 // state published from the fields, the commands a client's trx becomes
 // (t, rtx, r) or its refusal in each mode, the TX state reported until
 // sbitx shows it, and the transmit audio block - which modes take a
-// client's audio, its level, clipping, the 48 to 96 kHz upsampling,
+// client's audio, its level (full scale is sbitx's own FT8 tones' level), clipping, the 48 to 96 kHz upsampling,
 // silence when the client is late, and silence rather than the microphone
 // between a client's unkeying and sbitx receiving again. The harness plays the GTK and audio threads itself.
 // Built and run by make test, as /tmp/sbitx-test_tci_sbitx.
@@ -213,8 +213,10 @@ static void test_tx_audio(void) {
         crossings++;
     }
   }
-  double db = 20 * log10(peak / (0.5 * 2147483647.0));
-  CHECK(fabs(db) < 0.3, "0.5 at 48 kHz is 0.5 of int32 full scale at 96 kHz (%.2f dB)", db);
+  // sbitx's own FT8 tones reach tx_process() at 1/21 of full scale, and
+  // tx_process() divides input_mic by 2e9: a program's full scale is that
+  double db = 20 * log10(peak / (0.5 * 2.0e9 / 21.0));
+  CHECK(fabs(db) < 0.3, "0.5 is half the level of sbitx's own FT8 tones (%.2f dB)", db);
   double hz = crossings / 2.0 / (18 * 1024 / 96000.0);
   CHECK(fabs(hz - 1000) < 5, "a 1 kHz tone stays 1 kHz (%.1f Hz)", hz);
 
@@ -227,7 +229,8 @@ static void test_tx_audio(void) {
       hi = mic[j] > hi ? mic[j] : hi;
     }
   }
-  CHECK(hi == 2147483647 && lo == -2147483647, "over full scale clips, without wrapping");
+  int32_t top = (int32_t)lrint(2.0e9 / 21.0);
+  CHECK(hi == top && lo == -top, "over full scale clips at sbitx's FT8 level");
 
   int got = tci_sbitx_tx_block(mic, 1024, MODE_DIGITAL); // nothing sent
   int quiet = 1;
