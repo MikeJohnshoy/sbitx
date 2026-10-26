@@ -344,6 +344,7 @@ static void publish(void) {
   s.rit = field_int("RIT_DELTA");
   s.wpm = field_int("WPM");
   s.dbm = strength_dbm();
+  s.pitch = field_int("PITCH");
   pthread_mutex_lock(&state_lock);
   published = s;
   snprintf(published_mode, sizeof(published_mode), "%s", mode ? mode : "USB");
