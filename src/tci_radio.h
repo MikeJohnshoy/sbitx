@@ -31,6 +31,7 @@ struct tci_radio_state {
   int rit_on, rit;   // RIT and its offset, Hz
   int wpm;           // CW speed
   double dbm;        // signal strength, dBm, S9 = -73 (uncalibrated)
+  int pitch;         // CW pitch, Hz
 };
 
 void tci_radio_get(struct tci_radio_state *s);
