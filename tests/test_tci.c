@@ -4,7 +4,8 @@
 // loopback, with the radio stubbed (tci_radio.h): the initialization burst
 // and its form, the client count, echoes of every set to every client, reads answered to the
 // asker alone, setting frequency, mode, drive, volume, mute and CW speed,
-// dds and if as a panadapter tunes inside its panorama,
+// dds and if as a panadapter tunes inside its panorama, and in CW its
+// zero-beat dial a pitch from sbitx's carrier,
 // RIT refused with the state in force, a change made elsewhere reaching
 // every client, several commands to a message, the client limit, the
 // receive audio and I/Q streams (I and Q as given), CW text (cw_macros and
@@ -437,6 +438,80 @@ static void test_dds_and_if(void) {
   close(b);
 }
 
+static void test_cw_zero_beat(void) {
+  printf("CW: a panadapter's zero-beat dial and sbitx's carrier\n");
+  usleep(200000); // the earlier clients have gone
+  pthread_mutex_lock(&radio_lock);
+  radio.mode = TCI_MODE_CW;
+  radio.pitch = 700;
+  pthread_mutex_unlock(&radio_lock);
+  int logger = quick_connect();
+  if (logger < 0) {
+    CHECK(0, "a client");
+    return;
+  }
+  drain(logger, 100);
+  send_text(logger, "vfo:0,0,7030000;");
+  CHECK(expect(logger, "vfo:0,0,7030000;", 500) && radio_now().freq == 7030000,
+        "no panadapter: a vfo set is the carrier, as loggers expect");
+  drain(logger, 100);
+
+  int pan = quick_connect();
+  if (pan < 0) {
+    CHECK(0, "a panadapter");
+    close(logger);
+    return;
+  }
+  drain(pan, 100);
+  send_text(pan, "if:0,0,500;");
+  CHECK(expect(pan, "vfo:0,0,7030500;", 500) && radio_now().freq == 7031200,
+        "a panadapter's if: sbitx's dial a pitch above dds + if (%d)", radio_now().freq);
+  CHECK(tci_iq_center() == 7030000, "the I/Q's centre kept");
+  drain(pan, 100);
+  drain(logger, 100);
+  send_text(pan, "dds:0,7040000;");
+  CHECK(expect(pan, "vfo:0,0,7040500;", 500) && radio_now().freq == 7041200,
+        "its dds: likewise (%d)", radio_now().freq);
+  drain(pan, 100);
+  drain(logger, 100);
+
+  pthread_mutex_lock(&radio_lock);
+  radio.freq = 7050000; // the knob
+  pthread_mutex_unlock(&radio_lock);
+  CHECK(expect(pan, "dds:0,7049300;", 500) && expect(pan, "vfo:0,0,7049300;", 500),
+        "the dial moved on sbitx: reported a pitch below, as the panadapter's dial");
+  drain(pan, 100);
+  drain(logger, 100);
+
+  pthread_mutex_lock(&radio_lock);
+  radio.mode = TCI_MODE_CWR;
+  pthread_mutex_unlock(&radio_lock);
+  CHECK(expect(pan, "vfo:0,0,7050700;", 500), "in CWR, a pitch above");
+  send_text(pan, "if:0,0,100;");
+  CHECK(expect(pan, "vfo:0,0,7050800;", 500) && radio_now().freq == 7050100,
+        "and an if set puts the dial a pitch below (%d)", radio_now().freq);
+  drain(pan, 100);
+  drain(logger, 100);
+
+  pthread_mutex_lock(&radio_lock);
+  radio.mode = TCI_MODE_USB;
+  pthread_mutex_unlock(&radio_lock);
+  CHECK(expect(pan, "vfo:0,0,7050100;", 500) && radio_now().freq == 7050100,
+        "out of CW the two are one");
+  pthread_mutex_lock(&radio_lock);
+  radio.mode = TCI_MODE_CW;
+  pthread_mutex_unlock(&radio_lock);
+  CHECK(expect(logger, "vfo:0,0,7049400;", 500), "back in CW, a pitch below again");
+  drain(logger, 100);
+  close(pan);
+  CHECK(expect(logger, "vfo:0,0,7050100;", 1500), "the panadapter gone: the carrier again");
+  close(logger);
+  pthread_mutex_lock(&radio_lock);
+  radio.mode = TCI_MODE_USB;
+  radio.pitch = 0;
+  pthread_mutex_unlock(&radio_lock);
+}
+
 static void test_changes_elsewhere(void) {
   printf("changes made elsewhere\n");
   int a = quick_connect(), b = quick_connect();
@@ -813,6 +888,7 @@ int main(void) {
   test_sets_and_echoes();
   test_changes_elsewhere();
   test_dds_and_if();
+  test_cw_zero_beat();
   test_tx();
   test_cw_text();
   test_limit();
