@@ -207,9 +207,28 @@ zero-beat signal sits PITCH above the I/Q's centre (below in CWR); sbitx's
 own spectrum allows for it, with its pitch marker at dial + PITCH and a
 click there subtracting PITCH. TCI's copy takes it back out (the shift
 gets -PITCH in CW, +PITCH in CWR), so a client's frequency scale is the
-true one and a CW signal clicked in sdrOxide puts sbitx's dial, which in
-CW is where it transmits, on that signal. This too is reasoning from the
-code, and with the orientation above is to be confirmed (§11).
+true one. Confirmed on the radio: stations show in sdrOxide where they are.
+
+**CW: sdrOxide's zero-beat dial and sbitx's carrier.** On the radio, a CW
+station clicked in sdrOxide put sbitx's dial, and its transmission, PITCH
+below the station. sdrOxide's CW dial is a zero-beat: the station sits a
+pitch above it (`Mode::on_air_hz()`), and a click puts the dial a pitch
+below the station. For a radio that keys its own CW carrier on its VFO it
+moves the VFO a pitch above its dial (`rig_cw_offset_hz()`, its issue
+#170), but only where the radio's I/Q centre is its dial
+(`center_is_dial()`) or for a radio-and-receiver pair (#364); a TCI radio
+is neither, so it is sent the zero-beat dial itself, and sbitx, whose CW
+dial is the carrier its key sends, transmits a pitch low. Until sdrOxide
+does for TCI radios what it does for the others (§11), `tci.c` makes up
+the difference: while a client that tunes with `dds` or `if` (a
+panadapter) is connected, in CW sbitx's dial is TCI's `vfo` + PITCH (CWR:
+- PITCH), and every frequency TCI reports - `dds`, `if`, `vfo` - is in the
+panadapter's terms (`cw_offset()`). A change of mode or pitch, or the
+panadapter coming or going, re-centres. With no panadapter connected the
+`vfo` is the carrier, as loggers expect; with one connected, a logger
+reading the frequency in CW gets the zero-beat, PITCH below the carrier.
+sdrOxide doesn't send its pitch over TCI, so its CW pitch has to match
+sbitx's PITCH.
 
 ### 3.4 Receive audio
 
@@ -443,13 +462,16 @@ WSJT-X on the loopback and JTDX on TCI can both receive at once.
 needs and runs it; nothing in the radio program's own build changes.
 
 - `/tmp/sbitx-test_tci_ws`: 31 checks of the WebSocket server alone.
-- `/tmp/sbitx-test_tci`: 109 checks of the server with a stub radio: the
+- `/tmp/sbitx-test_tci`: 119 checks of the server with a stub radio: the
   burst's order and form; the client count; every set echoed to every client, with the value
   in force when it was out of range or not offered; reads answered to the
   asker alone; frequency, mode (uppercase accepted), drive (0 held at 1),
   `dds` and `if` (a `vfo` set re-centring, `if` tuning to `dds + if` with
   the centre kept, `dds` moving both with the offset kept, reads, an
-  offset beyond `if_limits`, the dial moving elsewhere re-centring),
+  offset beyond `if_limits`, the dial moving elsewhere re-centring; in CW,
+  a logger alone getting the carrier, a panadapter's `if` and `dds`
+  putting the dial a pitch above, the knob reported a pitch below, CWR the
+  other way, out of CW the two one, and the panadapter leaving),
   volume in dB, mute and rx_mute, CW speed and speed-up; RIT, split and
   XIT answered without setting anything; several commands to a
   message; a change elsewhere reaching both clients within about 50 ms,
@@ -554,14 +576,16 @@ styles, whose numbering style files and the web UI rely on.
     I/Q shifted to stay centred on `dds`, and in CW and CWR by the pitch,
     so a click in sdrOxide's panorama, in any mode, tunes sbitx there
     (§3.3).
+12. **CW with a panadapter connected: TCI's vfo is the panadapter's
+    zero-beat dial**, PITCH from sbitx's carrier, as a workaround until
+    sdrOxide offsets the VFO for TCI radios itself (§3.3, §11).
 
 ## 11. Open
 
-- **The I/Q's orientation and CW's pitch** (§3.3): as reasoned from the
-  code; to confirm with sdrOxide. In CW, a carrier with sbitx's dial on it
-  (zero beat in sbitx's speaker) should show in sdrOxide on the dial's
-  frequency; before the pitch correction it would have shown PITCH above
-  it. In USB, a station above the dial should show above it.
+- **sdrOxide's CW offset for TCI radios** (§3.3): to raise with sdrOxide's
+  author, asking that a TCI radio that keys its own CW carrier get the
+  VFO a pitch above sdrOxide's dial, as #170 and #364 do. When it does,
+  `cw_offset()` comes out, or the two would add up to twice the pitch.
 - **Audio levels** into WSJT-X and JTDX over TCI, compared with the
   loopback's; and the power a program's FT8 over TCI gives against
   sbitx's own FT8 at the same DRIVE, which should be the same (§3.5); to
