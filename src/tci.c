@@ -19,7 +19,17 @@
 // sends if. sbitx has one oscillator, so sbitx's dial goes to dds + if and
 // the I/Q TCI sends is shifted to stay centred on dds (sbitx.c,
 // tci_iq_center()). A vfo set, and the dial moving anywhere else in
-// sbitx, re-centre: dds = vfo, if = 0. RIT is reported but not set over TCI: a set
+// sbitx, re-centre: dds = vfo, if = 0.
+//
+// In CW the two count from different places. sbitx's dial is the carrier,
+// where its key transmits; a panadapter's CW dial (sdrOxide's) is a
+// zero-beat, the station a pitch above it, and sdrOxide sends that dial
+// as dds + if. So while a client that tunes with dds or if is connected,
+// in CW sbitx's dial is TCI's vfo + PITCH (CWR: - PITCH), and every
+// frequency TCI reports is in the client's terms, vfo = dial - PITCH
+// (cw_offset()). With no such client the vfo is the dial, as loggers
+// expect. sdrOxide doesn't send its pitch: its CW pitch has to be set to
+// sbitx's PITCH. RIT is reported but not set over TCI: a set
 // is answered with the value in force. XIT, split, tune and the DSP
 // switches report off. Changes made elsewhere (the screen, the knobs, the
 // web UI, rigctld) have no notification, so a service thread samples the
@@ -65,6 +75,7 @@
 
 struct client {
   int in_use, id;
+  int tunes_panorama; // has set dds or if: a panadapter
   struct tci_stream_cfg cfg;
   int buffering_ms;
   int rx_sensors, rx_sensors_ms;
@@ -166,11 +177,22 @@ static void set_center(int dds, int offset) {
   atomic_store(&iq_center, dds);
 }
 
+// How far sbitx's dial is above TCI's vfo: in CW, while a panadapter is
+// connected, the pitch between its zero-beat dial and sbitx's carrier.
+static int cw_offset(const struct tci_radio_state *s) {
+  int panadapter = 0;
+  for (int k = 0; k < WS_MAX_CLIENTS; k++)
+    panadapter |= clients[k].in_use && clients[k].tunes_panorama;
+  if (!panadapter)
+    return 0;
+  return s->mode == TCI_MODE_CW ? s->pitch : s->mode == TCI_MODE_CWR ? -s->pitch : 0;
+}
+
 static void pub_freq(const struct tci_radio_state *s) {
   tci_broadcast("dds:0,%d;", center);
   tci_broadcast("if:0,0,%d;", if_off);
-  tci_broadcast("vfo:0,0,%d;", s->freq);
-  tci_broadcast("vfo:0,1,%d;", s->freq);
+  tci_broadcast("vfo:0,0,%d;", center + if_off);
+  tci_broadcast("vfo:0,1,%d;", center + if_off);
   pub.freq = s->freq;
 }
 static void pub_mode(const struct tci_radio_state *s) {
@@ -212,9 +234,13 @@ static void pub_wpm(const struct tci_radio_state *s) {
 static void publish_changes(void) {
   struct tci_radio_state s;
   tci_radio_get(&s);
-  if (s.freq != pub.freq) {
-    if (s.freq != center + if_off)
-      set_center(s.freq, 0); // the dial moved elsewhere in sbitx: re-centre
+  int off = cw_offset(&s);
+  if (s.freq != center + if_off + off) {
+    // the dial moved elsewhere in sbitx, or the CW offset changed (the
+    // mode, the pitch, a panadapter coming or going): re-centre
+    set_center(s.freq - off, 0);
+    pub_freq(&s);
+  } else if (s.freq != pub.freq) {
     pub_freq(&s);
   }
   if (s.mode != pub.mode)
@@ -355,20 +381,22 @@ static void handle(int slot, char *cmd) {
     parse_int(argv[1], &ch);
     if (argc >= 3) {
       if (ch == 0 && parse_int(argv[2], &v) && v >= TCI_VFO_MIN && v <= TCI_VFO_MAX) {
-        tci_radio_set_freq((int)v);
+        tci_radio_get(&s);
+        tci_radio_set_freq((int)v + cw_offset(&s));
         set_center((int)v, 0);
       }
       tci_radio_get(&s);
       pub_freq(&s); // echo, with the frequency in force
     } else {
-      tci_radio_get(&s);
-      tci_send_to(slot, "vfo:0,%lld,%d;", ch, s.freq);
+      tci_send_to(slot, "vfo:0,%lld,%d;", ch, center + if_off);
     }
   } else if (!strcmp(name, "dds") && trx0) {
     if (argc >= 2) {
       // the I/Q's centre moves, and the VFO with it, the offset kept
+      c->tunes_panorama = 1;
       if (parse_int(argv[1], &v) && v + if_off >= TCI_VFO_MIN && v + if_off <= TCI_VFO_MAX) {
-        tci_radio_set_freq((int)v + if_off);
+        tci_radio_get(&s);
+        tci_radio_set_freq((int)v + if_off + cw_offset(&s));
         set_center((int)v, if_off);
       }
       tci_radio_get(&s);
@@ -381,9 +409,11 @@ static void handle(int slot, char *cmd) {
     parse_int(argv[1], &ch);
     if (argc >= 3) {
       // the VFO moves within the panorama, the centre kept
+      c->tunes_panorama = 1;
       if (ch == 0 && parse_int(argv[2], &v) && v >= TCI_IF_MIN && v <= TCI_IF_MAX &&
           center + v >= TCI_VFO_MIN && center + v <= TCI_VFO_MAX) {
-        tci_radio_set_freq(center + (int)v);
+        tci_radio_get(&s);
+        tci_radio_set_freq(center + (int)v + cw_offset(&s));
         set_center(center, (int)v);
       }
       tci_radio_get(&s);
@@ -588,8 +618,8 @@ static void send_init(int slot) {
   tci_send_to(slot, "audio_samplerate:%d;", clients[slot].cfg.audio_rate);
   tci_send_to(slot, "dds:0,%d;", center);
   tci_send_to(slot, "if:0,0,%d;", if_off);
-  tci_send_to(slot, "vfo:0,0,%d;", s.freq);
-  tci_send_to(slot, "vfo:0,1,%d;", s.freq);
+  tci_send_to(slot, "vfo:0,0,%d;", center + if_off);
+  tci_send_to(slot, "vfo:0,1,%d;", center + if_off);
   tci_send_to(slot, "modulation:0,%s;", mode_name(s.mode));
   tci_send_to(slot, "rx_enable:0,true;");
   tci_send_to(slot, "tx_enable:0,true;");
