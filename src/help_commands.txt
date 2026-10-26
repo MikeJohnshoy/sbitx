@@ -200,7 +200,9 @@ first; on an external keyboard type \ directly. Press Enter to execute.
   as sBitx's own macros are; closing the key or paddle stops it.
   A panadapter such as sdrOxide tunes sBitx wherever you click in its
   panorama, CW signals included; set its I/Q rate to 48 kHz, the width
-  sBitx receives.
+  sBitx receives, and its CW pitch to sBitx's PITCH. In CW, while such a
+  panadapter is connected, TCI reports frequencies as its dial does, PITCH
+  below the carrier sBitx shows and transmits on.
   Default: off
 
 * \tci_port [1024-65535]
